@@ -135,7 +135,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-html { scroll-padding-top: 64px; scroll-padding-bottom: 104px; scroll-behavior: smooth; }
+html { scroll-padding-top: 64px; scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom)); scroll-behavior: smooth; }
 ::selection { background: var(--butter); color: var(--on-butter); }
 button, a, input, select, textarea, summary, label { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 /* Long unbroken strings (IDs, URLs, pasted text) wrap instead of pushing the layout sideways. */
@@ -277,7 +277,7 @@ label > input, label > select, label > textarea, label > .hrs-input { margin-top
 .nav-reason { flex-basis: 100%; margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-2); text-align: right; }
 .ob-nav .btn.primary { flex: 1; max-width: 240px; margin-left: auto; }
 .upload {
-  display: flex; align-items: center; gap: 14px; padding: 18px; margin: 16px 0 10px; border: 1.5px dashed var(--line-strong); border-radius: var(--radius-lg);
+  display: flex; align-items: center; gap: 14px; padding: 18px; margin: 16px 0 10px; border: 1.5px solid var(--line-strong); border-radius: var(--radius-lg);
   background: var(--surface); cursor: pointer; font-weight: 400; color: var(--ink);
 }
 .upload:hover, .upload:focus-within { border-color: var(--forest); background: var(--sage-tint); }
@@ -323,7 +323,7 @@ label > input, label > select, label > textarea, label > .hrs-input { margin-top
 .q h2 { font-size: 16px; line-height: 22px; font-weight: 600; }
 .inline { display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--ink-2); }
 .inline input { width: auto; }
-.follow { border-top: 1px dashed var(--line); margin-top: 12px; padding-top: 8px; }
+.follow { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
 .follow p { color: var(--ink-2); }
 .time-range span { color: var(--ink-2); font-size: 13px; }
 .integrations { display: grid; gap: 10px; margin: 14px 0; }
@@ -418,7 +418,7 @@ label > input, label > select, label > textarea, label > .hrs-input { margin-top
 .clock-step:hover, .clock-now:hover { background: var(--bg); }
 .home-head { padding: 20px 0 8px; position: relative; }
 .home-head .theme-toggle { position: absolute; top: 16px; right: 0; }
-.home-head > .eyebrow, .home-head > h1 { padding-right: 96px; }
+.home-head.has-toggle > .eyebrow, .home-head.has-toggle > h1 { padding-right: 96px; }
 /* Light/dark toggle */
 .theme-toggle {
   display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 12px; border-radius: var(--radius-pill);
@@ -600,7 +600,7 @@ button.tl-card:hover { border-color: var(--line-strong); }
 .tc-icon { color: var(--forest); display: inline-flex; margin-top: 2px; }
 .task-card.done .tc-icon { color: var(--success); }
 .tc-icon svg { width: 18px; height: 18px; }
-.tc-context { font-size: 13px; color: var(--ink-3); margin: 2px 0 0 26px; }
+.tc-context { font-size: 13px; color: var(--ink-3); margin: 2px 0 0 26px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .tc-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0 0; font-size: 14px; line-height: 20px; }
 .tc-meta div { display: contents; }
 .tc-meta dt { color: var(--ink-3); }
@@ -878,3 +878,152 @@ body.spotlight .focus { z-index: 36; }
 
 /* Reduced motion: the global rule removes every animation and transition; each cue has a static twin (motion-spec §8). */
 @media (prefers-reduced-motion: reduce) { .flip-ghosts { display: none; } }   /* the global rule above removes the rest */
+
+/* ============================================================================
+   v3 (SIKAD-UIUX-AUDIT-REPORT_v3.md). Product-mode helpers, judge dock,
+   integrations, Overview weeks, and the fluid desktop layout (design.md §11).
+   ========================================================================== */
+
+/* ---------- sample helpers: ordinary links + one muted caption ---------- */
+.text-link {
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--target); padding: 0 2px; background: none; border: 0;
+  color: var(--forest); font-size: 14px; line-height: 20px; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+}
+.text-link svg { width: 18px; height: 18px; }
+.text-link:hover { color: var(--forest-hover); }
+.text-link:disabled { color: var(--ink-disabled); cursor: not-allowed; }
+.sample-note { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0; font-size: 13px; line-height: 18px; color: var(--ink-3); }
+.sample-note svg { width: 16px; height: 16px; margin-top: 1px; }
+.head-sub { margin: 2px 0 0; font-size: 13px; line-height: 18px; color: var(--ink-3); }
+.version { display: block; margin: 12px auto 0; min-height: var(--target); padding: 0 12px; background: none; border: 0; color: var(--ink-3); font-size: 12px; line-height: 16px; cursor: default; }
+.spinner { display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; border: 2px solid var(--line-strong); border-top-color: var(--forest); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.offline-banner { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0 0; padding: 8px 12px; border-radius: var(--radius-md); background: var(--info-tint); color: var(--ink-2); font-size: 13px; line-height: 18px; }
+.offline-banner svg { width: 16px; height: 16px; margin-top: 1px; color: var(--info); }
+
+/* ---------- judge tools dock (presenter only: ?demo=1) ---------- */
+.judge-dock { position: fixed; z-index: 40; left: 12px; bottom: calc(92px + env(safe-area-inset-bottom)); display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 8px; }
+.judge-dock.in-setup { top: calc(8px + env(safe-area-inset-top)); bottom: auto; flex-direction: column; }
+.judge-pill {
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--target); padding: 6px 14px; border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow-2);
+}
+.judge-pill svg { width: 18px; height: 18px; }
+.judge-panel { width: min(340px, calc(100vw - 24px)); max-height: 60dvh; overflow-y: auto; padding: 12px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-2); }
+.jd-label { margin: 10px 0 4px; font-size: 12px; line-height: 16px; font-weight: 700; color: var(--ink-3); }
+.jd-label:first-child { margin-top: 0; }
+.jd-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.jd-btn { min-height: var(--target); padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--ink); font-size: 13px; font-weight: 600; cursor: pointer; }
+.jd-btn:hover { background: var(--surface-2); }
+.jd-now { flex: 1 1 100%; text-align: left; }
+.jd-scen summary { display: flex; align-items: center; min-height: var(--target); font-size: 13px; font-weight: 600; cursor: pointer; }
+.jd-scen .chip-btn { font-size: 13px; padding: 6px 12px; }
+
+/* ---------- Focus Card: method line while a session runs ---------- */
+.sm-name { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; color: var(--focus-ink); }
+.sm-name .link { min-height: var(--target); padding: 0 4px; }
+.session-why { margin: 8px 0 0; font-size: 13px; line-height: 18px; color: var(--focus-muted); }
+
+/* ---------- Profile: class schedule by day, limits ---------- */
+.day-group + .day-group { margin-top: 12px; }
+.dg-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.card .dg-head h3 { margin: 0; font-size: 14px; color: var(--ink); }
+.day-group .plain { margin: 0; }
+.fixed-list .btn { flex: none; }
+.limits-list { margin: 0; padding-left: 18px; display: grid; gap: 8px; font-size: 14px; line-height: 20px; color: var(--ink-2); }
+
+/* ---------- integrations: states + import review ---------- */
+.int-ok, .int-error { display: inline-flex; align-items: flex-start; gap: 4px; }
+.int-ok svg, .int-error svg { width: 14px; height: 14px; margin-top: 2px; }
+.integration small .int-ok { color: var(--success); }
+.integration small .int-error { color: var(--critical); font-weight: 600; }
+.chip.src { background: var(--info-tint); color: var(--info); }
+.import-list { display: grid; gap: 10px; margin: 12px 0; }
+.import-row { display: flex; gap: 10px; align-items: flex-start; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.import-row.excluded { background: var(--surface-2); }
+.import-row .toggle { margin: 0; }
+.ir-body { flex: 1; min-width: 0; display: grid; gap: 8px; }
+.ir-due { display: flex; align-items: center; gap: 8px; }
+.ir-due input { flex: 1; min-width: 0; margin-top: 0; }
+.ir-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---------- setup: named orgs ---------- */
+.org-row { display: grid; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.org-row .row { margin: 0; }
+.org-row .btn { justify-self: start; }
+.org-row .field-error { margin: 0; }
+.follow > .btn { margin-top: 8px; }
+.q > .inline { margin-top: 10px; }
+.q > .inline input[type="number"] { max-width: 110px; }
+
+/* ---------- Overview: week navigation, past days ---------- */
+.week-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 10px; }
+.week-nav .icon-btn { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); }
+.week-nav .icon-btn:disabled { color: var(--ink-disabled); border-color: var(--line); cursor: not-allowed; }
+.week-label { display: flex; flex-direction: column; min-width: 108px; padding: 0 6px; text-align: center; }
+.week-label b { font-size: 15px; line-height: 20px; color: var(--ink); }
+.week-label span { font-size: 12px; line-height: 16px; color: var(--ink-3); }
+.week-nav .btn { margin-left: auto; }
+.daychip.is-past:not(.on) { background: var(--surface-2); }
+.chip.st-done { background: var(--success-tint); color: var(--success); }
+.chip.st-missed { background: var(--warn-tint); color: var(--warn); }
+.k-moved .tl-card { background: var(--surface-2); }
+.k-moved .tl-name { color: var(--ink-2); }
+/* On a finished day a strike means done, so missed work keeps a plain title. */
+.is-history.k-missed .tl-name { text-decoration: none; color: var(--ink-2); }
+.empty-week { margin: 0; }
+
+/* ---------- layout columns ---------- */
+.rail-brand { display: none; }
+/* Phones: one column, with Your day above the class schedule. */
+.cols.profile { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.cols.profile > .col-a, .cols.profile > .col-b { display: contents; }
+.cols.profile .card { margin: 0; order: 3; }
+.cols.profile .card.p-day { order: 1; }
+.cols.profile .card.p-classes { order: 2; }
+.cols.profile .card.limits { order: 4; }
+.cols.profile .card.p-reset { order: 5; }
+
+/* ≥ 768px: the bottom nav becomes a left rail; the page is fluid, with no outer box. */
+@media (min-width: 768px) {
+  html { scroll-padding-bottom: 24px; }
+  body { background: var(--bg); }
+  #app { max-width: none; border: 0; }
+  .screen.onboarding { max-width: 640px; margin-inline: auto; padding-inline: 24px; }
+  .screen.app { display: grid; grid-template-columns: 208px minmax(0, 1fr); padding: 0; }
+  .bottom-nav {
+    grid-column: 1; grid-row: 1; position: sticky; top: 0; bottom: auto; left: auto; transform: none; width: auto; max-width: none; height: 100vh; height: 100dvh;
+    display: flex; flex-direction: column; align-items: stretch; gap: 4px; overflow-y: auto;
+    padding: calc(20px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+    background: var(--bg); border-top: 0; border-right: 1px solid var(--line);
+  }
+  .rail-brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 16px; font-family: var(--font-display); font-size: 20px; line-height: 26px; font-weight: 800; letter-spacing: -.02em; color: var(--ink); }
+  .rail-brand .logo { width: 32px; height: 32px; }
+  .nav-btn { flex-direction: row; justify-content: flex-start; gap: 12px; min-height: var(--target); padding: 10px 12px; font-size: 14px; line-height: 20px; border-radius: var(--radius-md); }
+  .nav-btn:hover { background: var(--surface-2); }
+  .nav-btn.on { background: var(--surface-2); color: var(--ink); }
+  .nav-btn.on::before { top: 10px; bottom: 10px; left: 0; right: auto; width: 3px; height: auto; border-radius: 0 3px 3px 0; }
+  .fab { order: 9; justify-self: auto; flex-direction: row; justify-content: flex-start; gap: 10px; margin-top: 12px; padding: 6px 10px; min-height: 52px; font-size: 14px; line-height: 20px; border-radius: var(--radius-md); }
+  .fab:hover { background: var(--surface-2); }
+  .fab-circle { width: 40px; height: 40px; margin-top: 0; border: 0; box-shadow: none; }
+  .fab-circle svg { width: 22px; height: 22px; }
+  .view { grid-column: 2; grid-row: 1; width: 100%; max-width: calc(1400px + 2 * clamp(24px, 4vw, 64px)); margin-inline: auto; padding: 8px clamp(24px, 4vw, 64px) 48px; }
+  .sheet-backdrop { align-items: center; padding: 24px; }
+  .sheet { max-width: 520px; max-height: min(86dvh, 820px); border-radius: var(--radius-xl); padding-bottom: 24px; }
+  .sheet-grip { display: none; }
+  .sheet-actions { bottom: -24px; }
+  .toast { bottom: 24px; }
+  .judge-dock { left: auto; right: 16px; bottom: 16px; align-items: flex-end; }
+  .judge-dock.in-setup { top: 12px; right: auto; left: 12px; align-items: flex-start; }
+}
+
+/* ≥ 1024px: Home, Overview and Profile use two columns that each keep their own height. */
+@media (min-width: 1024px) {
+  .cols, .cols.profile { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 0 clamp(24px, 3vw, 48px); align-items: start; }
+  .cols > .col-b > .section:first-child { margin-top: 12px; }
+  .cols.profile > .col-a, .cols.profile > .col-b { display: block; }
+  .cols.profile .card { margin: 0 0 12px; }
+}
+@media (min-width: 1280px) {
+  .cols, .cols.profile { grid-template-columns: minmax(360px, 5fr) minmax(480px, 7fr); }
+}

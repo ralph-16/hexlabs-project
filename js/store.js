@@ -25,6 +25,7 @@
       workLog: [],      // { taskId, mins, at } — work actually credited; basis of weekly progress
       focusLog: [],     // { id, taskId, title, method, at, focusedMins, outcome } — one entry per session the student ended
       prefs: {},        // { focusMethod } — last working method the student chose
+      daySnapshots: {}, // { 'YYYY-MM-DD': { blocks: [{ id, taskId, title, start, end, kind, movedAt? }] } } — what was planned for each day
       engineLog: [], seq: 1,
     };
   }
@@ -42,6 +43,7 @@
     if (!st.user || typeof st.user !== 'object') st.user = { name: '' };
     if (!st.prefs || typeof st.prefs !== 'object') st.prefs = {};
     if (!st.integrations || typeof st.integrations !== 'object') st.integrations = {};
+    if (!st.daySnapshots || typeof st.daySnapshots !== 'object' || Array.isArray(st.daySnapshots)) st.daySnapshots = {};
     st.tasks = st.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.title === 'string');
     for (const t of st.tasks) { if (!Array.isArray(t.parts)) t.parts = []; if (!Array.isArray(t.dependencies)) t.dependencies = []; }
     if (st.active && !st.plan.some((x) => x && x.id === st.active.sessionId)) st.active = null;
@@ -128,7 +130,9 @@
     const prevPlan = state.plan.filter((s) => s.end > state.now);
     const res = E.schedule(state, { prevPlan: opts.fresh ? null : prevPlan });
     const changes = opts.fresh ? [] : E.diff(prevPlan, res.plan, state, res.unscheduled);
+    const oldPlan = state.plan;
     state.plan = res.plan;
+    snapshotDay(state, oldPlan);
     state.unscheduled = res.unscheduled.map((x) => ({ unitId: x.unit.id, taskId: x.unit.taskId, title: x.unit.title, mins: x.unit.mins, deadline: x.unit.deadline, reason: x.reason, waitingOn: x.waitingOn || null }));
     state.needsDeadline = res.needsDeadline;
     state.alerts = res.alerts;
@@ -146,6 +150,91 @@
       };
     }
     return { res, changes, output };
+  }
+
+  // -------------------------------------------------------- day snapshots --
+  // What was planned for each day, kept so Overview can show past weeks (planned vs done vs missed).
+  // Additive record only: nothing here feeds back into planning.
+  const SNAPSHOT_DAYS = 56;   // 8 weeks
+  function snapshotDay(state, oldPlan) {
+    const snaps = state.daySnapshots || (state.daySnapshots = {});
+    const today = T.dayStart(state.now);
+    const has = (s) => !!snaps[T.key(s.start)] && snaps[T.key(s.start)].blocks.some((b) => b.id === s.id);
+    const put = (s) => {
+      const day = snaps[T.key(s.start)] || (snaps[T.key(s.start)] = { blocks: [] });
+      let b = day.blocks.find((x) => x.id === s.id);
+      if (!b) { b = { id: s.id, taskId: s.taskId, title: s.title, kind: 'task' }; day.blocks.push(b); }
+      b.title = s.title; b.start = s.start; b.end = s.end;
+      delete b.movedAt;
+    };
+    // Days the clock passed without a replan of their own: keep what was planned for them.
+    for (const s of oldPlan || []) if (T.dayStart(s.start) < today && !has(s)) put(s);
+    const todays = state.plan.filter((s) => T.dayStart(s.start) === today);
+    todays.forEach(put);
+    // A block that left today's plan while it was still ahead was moved. It is marked, never deleted.
+    const ids = new Set(todays.map((s) => s.id));
+    const day = snaps[T.key(today)];
+    if (day) for (const b of day.blocks) if (!ids.has(b.id) && !b.movedAt && b.end > state.now) b.movedAt = state.now;
+    const cutoff = T.key(today - SNAPSHOT_DAYS * T.DAY);
+    for (const k of Object.keys(snaps)) if (k < cutoff) delete snaps[k];
+  }
+
+  /**
+   * Read-only summary of one day ('YYYY-MM-DD'): what was planned and what became of it.
+   *   done   = a history entry for the same task, finished that day
+   *   moved  = a replan moved the block away before it happened (and it was not done)
+   *   missed = the day is over and the block was neither done nor moved
+   */
+  function daySummary(state, dateKey) {
+    const snap = (state.daySnapshots || {})[dateKey];
+    const dayMs = T.fromISO(dateKey + 'T00:00');
+    const past = dayMs < T.dayStart(state.now);
+    const hist = state.history.filter((h) => h.doneAt != null && T.key(h.doneAt) === dateKey);
+    const histKey = (h) => String(h.id).split('@')[0];
+    const blockIds = new Set((snap ? snap.blocks : []).map((b) => b.id));
+    const blocks = (snap ? snap.blocks : []).slice().sort((a, b) => a.start - b.start).map((b) => {
+      // This block's own completion, or a completion of the same task that belongs to no other block that day.
+      const done = hist.some((h) => histKey(h) === b.id) || hist.some((h) => h.taskId === b.taskId && !blockIds.has(histKey(h)));
+      const moved = !done && !!b.movedAt;
+      return Object.assign({}, b, { done, moved, missed: past && !done && !moved });
+    });
+    const mins = (b) => Math.round((b.end - b.start) / MIN);
+    const sum = (list) => list.reduce((a, b) => a + mins(b), 0);
+    const done = blocks.filter((b) => b.done), missed = blocks.filter((b) => b.missed), moved = blocks.filter((b) => b.moved);
+    return { blocks, done, missed, moved, plannedMins: sum(blocks), doneMins: sum(done) };
+  }
+
+  /**
+   * Alex's previous week (Oct 5–11): six finished assignments and one that was planned but never
+   * marked done, so Overview and Tasks → Completed have real history in the demo.
+   * `overdue` is the still-open task behind the block that was not done.
+   */
+  function seedPastWeek(state, overdue) {
+    const at = (d, h, mi) => T.make(2026, 10, d, h, mi);
+    const rows = [   // [day, start, end, course, title, due]
+      [5, [12, 15], [13, 45], 'IT 207', 'Stakeholder and Problem Analysis', at(5, 17, 0)],
+      [5, [20, 0], [20, 45], 'IT 203', 'OOP Concepts Quiz', at(5, 23, 59)],
+      [6, [11, 15], [12, 45], 'IT 208', 'HTML and CSS Layout Exercise', at(6, 23, 59)],
+      [6, [19, 0], [20, 30], 'IT 204', 'ERD Practice Activity', at(6, 23, 59)],
+      [7, [17, 30], [18, 30], 'IT 205', null, null],              // planned for the overdue task, not done
+      [7, [18, 45], [19, 45], 'GE 104', 'Stakeholder and Data Privacy Case Reflection', at(7, 23, 59)],
+      [7, [20, 0], [20, 45], 'IT 206', 'OSI Model Quick Check', at(8, 17, 0)],
+    ];
+    for (const [d, [sh, sm], [eh, em], course, title, due] of rows) {
+      const start = at(d, sh, sm), end = at(d, eh, em);
+      let task = overdue;
+      if (title) {
+        task = makeTask(state, { title, context: course, deadline: due, durationMins: Math.round((end - start) / MIN) });
+        task.status = 'done'; task.remainingMins = 0; task.createdAt = start;
+        state.tasks.push(task);
+      }
+      const id = `${task.id}#0`, key = T.key(start);
+      const day = state.daySnapshots[key] || (state.daySnapshots[key] = { blocks: [] });
+      day.blocks.push({ id, taskId: task.id, title: task.title, start, end, kind: 'task' });
+      if (!title) continue;
+      state.history.push({ id: `${id}@${end}`, taskId: task.id, title: task.title, start, end, doneAt: end });
+      state.workLog.push({ taskId: task.id, mins: task.durationMins, at: end });
+    }
   }
 
   // -------------------------------------------------------------- actions --
@@ -409,7 +498,7 @@
     b.dayStart = ls.dayStart; b.dayEnd = ls.dayEnd; b.commuteMins = ls.commuteMins;
     b.recurring = b.recurring.filter((r) => r.kind !== 'work' && r.kind !== 'org');
     for (const w of ls.work || []) b.recurring.push({ id: uid(state, 'r'), title: 'Part-time work', kind: 'work', day: w.day, start: w.start, end: w.end });
-    for (const o of ls.org || []) b.recurring.push({ id: uid(state, 'r'), title: 'Org meeting', kind: 'org', day: o.day, start: o.start, end: o.end });
+    for (const o of ls.org || []) b.recurring.push({ id: uid(state, 'r'), title: o.name || 'Org meeting', kind: 'org', day: o.day, start: o.start, end: o.end });
   }
 
   function parseContext(state) {
@@ -425,13 +514,17 @@
   function loadDemo(state) {
     state.user.name = 'Alex';
     const p1 = P.parseSchedule(D.SAMPLE_COR_TEXT);
-    log(state, 'Phase 1 · Schedule extraction', 'Sample COR (BSIT 3B)', p1);
+    log(state, 'Phase 1 · Schedule extraction', 'Sample COR (BSIT 3B-G1 DBA)', p1);
     state.baseline.classes = classesFromPhase1(state, p1);
     applyLifestyle(state, D.SAMPLE_LIFESTYLE);
-    state.integrations = { gcal: true };
+    state.integrations = {};
     const parsed = P.parse(D.SAMPLE_BRAIN_DUMP, parseContext(state));
     log(state, 'Phase 2 · Brain dump', D.SAMPLE_BRAIN_DUMP, P.toPhase2(parsed));
     for (const i of parsed.intents) if (i.type === 'task') state.tasks.push(makeTask(state, i.task));
+    // Carried over from last week: planned on Wednesday, never marked done, now past its deadline.
+    const overdue = makeTask(state, { title: 'Algorithm Tracing Worksheet', context: 'IT 205', deadline: T.make(2026, 10, 7, 23, 59), durationMins: 60, isAiEstimate: true });
+    state.tasks.push(overdue);
+    seedPastWeek(state, overdue);
     state.onboarded = true;
     replan(state, null, { fresh: true });
     return state;
@@ -441,7 +534,7 @@
     KEY, clone, initialState, load, save, reset, uid, log, taskRemaining, taskTotal, makeTask, setDuration,
     replan, findSession, startSession, pauseSession, resumeSession, skipSession, focusElapsedMs, endFocus,
     completeSession, snoozeSession, dismissCheckin, setClock,
-    extendTask, completePart, completeTask, setTaskRemaining, weeklyProgress, sanitize,
+    extendTask, completePart, completeTask, setTaskRemaining, weeklyProgress, sanitize, daySummary,
     addEvent, addRecurring, cancelOccurrence, classesFromPhase1, applyLifestyle, parseContext, loadDemo,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

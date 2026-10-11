@@ -344,8 +344,12 @@ To make SIKAD feel premium, motion must feel **tactile, physical, and snappy**.
 
 **Layout & PWA (Progressive Web App):**
 - **Mobile & Installable First:** SIKAD is designed to be a PWA installable from Chrome to a phone's home screen. The layout must be fluidly responsive and feel like a native app.
-- **Phones are primary:** 320–480 px, single column, 16 px gutters, absolutely no horizontal scroll. Must use `env(safe-area-inset-bottom)` and `env(safe-area-inset-top)` on the nav and bottom sheets to accommodate phone notches and home bars.
-- **Above 560 px**, keep the centred 480 px column (it already exists) for the hackathon demo, letting the off-white paper canvas act as a matting border around the app. Do not attempt a massive full-screen layout for this MVP.
+- **Phones are primary:** 320–480 px, single column, 16 px gutters, absolutely no horizontal scroll. Must use `env(safe-area-inset-bottom)` and `env(safe-area-inset-top)` on the nav and bottom sheets to accommodate phone notches and home bars. Mobile (<768px) remains a single column.
+- **Responsive Layout:**
+  - **< 768 px (Mobile):** Single column, bottom navigation bar, centered mobile container.
+  - **≥ 768 px (Tablet/Desktop):** Left side rail (~208px) replaces the bottom nav. It is pinned to the viewport's left edge, full height, with a right border only. Logo, navigation buttons, and the Ask SIKAD button live in the rail; bottom navigation padding removed; bottom sheets and modals max ~520px, centered.
+  - **≥ 1024 px (Wide Desktop):** Two-column layouts for Home (left: Focus Card + This week; right: Timeline), Overview (left: week progress + day strip; right: the selected day) and Profile (left: Class schedule, limits; right: Your day, commitments, Appearance, integrations). Columns keep their own height (`align-items: start`).
+  - **Fluid, not boxed:** the page background is the same everywhere. No outer container border, shadow, radius or different surface around the app. The main area fills the width left of the rail with `padding-inline: clamp(24px, 4vw, 64px)`; content is centered within it up to ~1400px.
 
 **Accessibility (WCAG 2.2 AA):**
 - **Focus visible:** a 2 px ring with 2 px offset on every interactive element.
@@ -367,12 +371,19 @@ To make SIKAD feel premium, motion must feel **tactile, physical, and snappy**.
      3. **check-ins**
      4. **Focus Card**
      5. blocking status (Not enough time / Needs a deadline / warnings)
-     6. "Does it all fit?" (Weekly Progress indicator)
+     6. "This week": a progress bar and one line that also says whether it all fits ("6 of 9 hrs done · 3 sessions · Fits")
      7. timeline (Today / Tomorrow segmented control)
    - **Primary action:** the Focus Card's Butter button (the only Butter on screen).
 3. **Daily timeline and task list**
    - **Timeline:** §7.4 (Home and Overview).
-   - **Tasks tab:** h1 "Tasks" with an eyebrow count → secondary "+ Add a task manually" → groups.
+   - **Tasks tab:** h1 "Tasks" with a plain count line → secondary "+ Add a task manually" → groups.
+   - **Eyebrows** are for dates/times and "WHAT TO DO NEXT" only. Tasks, Overview and Profile headers have none.
+   - **Theme:** a one-tap Light/Dark pill sits in the header on Welcome, every setup step and Home. Profile has the full Light / Dark / System row. Both use the same saved choice.
+   - **Navigation:** the centre action is labelled "Ask SIKAD" (it opens the brain-dump sheet).
+4. **Overview**
+   - **Header:** h1 "Overview", then ‹ week label ("Oct 5–11") › and a "This week" button when away from the current week. Weeks run Monday to Sunday.
+   - **Progress card on every week:** current and future weeks show "Available vs. required"; past weeks show "Done vs. planned" with missed and moved counts.
+   - **Past days** list fixed commitments plus what was planned, each with a Done, Missed or Moved chip (icon + word, §5.4).
 
 ---
 

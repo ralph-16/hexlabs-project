@@ -11,12 +11,17 @@
   let undoSnap = null;
   const ui = {
     tab: 'home', dayView: 'today', weekDay: null, sheet: null, toast: null, focusOnly: false,
+    weekStart: null,    // Monday of the week shown in Overview; null = the current week
+    offline: typeof navigator !== 'undefined' && navigator.onLine === false,
     askThread: [],      // answered questions shown in the Ask SIKAD panel (this visit only)
     dict: null,         // dictaphone state: { path, state, final, interim, note, error }
     focusPick: null,    // session id while the student is choosing a working method
     spotlightOff: false, // the student un-dimmed the screen during Focus Mode; the session keeps running
+    dock: false,        // judge-tools panel open (judge mode only)
+    integrationState: {}, // id → { status: idle|connecting|connected|error, account, lastSync, imported, error } (this visit only)
     ob: state.obDraft || freshOnboarding(),
   };
+  ui.ob.extracting = false;   // a saved draft never resumes mid-read
 
   const $app = document.getElementById('app');
   const $sheet = document.getElementById('sheet-root');
@@ -26,7 +31,7 @@
     return {
       step: 0, name: '', corText: '', classes: [], analysis: '', extracted: false, uploadNote: '',
       ls: { dayStart: '06:00', dayEnd: '22:00', commuteMins: 60, working: null, workDays: [6], workStart: '09:00', workEnd: '14:00',
-        org: null, orgDay: 4, orgStart: '17:00', orgEnd: '19:00' },
+        commuteCustom: false, org: null, orgs: [] },
       dumpText: '', review: null, genStep: 0,
     };
   }
@@ -70,6 +75,7 @@
     snooze: '<svg viewBox="0 0 24 24"><path d="M5 12h12M13 7l5 5-5 5"/></svg>',
     braindump: '<svg viewBox="0 0 24 24"><path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-8l-4.5 4v-4H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/><path d="M8 9h8M8 12.5h5"/></svg>',
     chevron: '<svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>',
+    back: '<svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>',
     sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>',
     moon: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
   };
@@ -83,16 +89,71 @@
   let themeFade = 0;
   const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   const currentTheme = () => document.documentElement.dataset.theme || (darkQuery && darkQuery.matches ? 'dark' : 'light');
+  const themeSetting = () => document.documentElement.dataset.theme || 'system';
+  /** theme: 'light' | 'dark' | 'system'. "System" clears the saved choice and follows the OS again. */
   function applyTheme(theme) {
-    document.documentElement.dataset.theme = theme;
+    const html = document.documentElement;
+    if (theme === 'system') delete html.dataset.theme; else html.dataset.theme = theme;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', theme === 'dark' ? '#131917' : '#294B3A');
-    try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* storage unavailable: still applies for this session */ }
+    if (meta) meta.setAttribute('content', currentTheme() === 'dark' ? '#131917' : '#294B3A');
+    try { if (theme === 'system') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, theme); } catch (e) { /* storage unavailable: still applies for this session */ }
+  }
+  function switchTheme(theme) {
+    const html = document.documentElement;
+    html.classList.add('theme-fade');                       // colours cross-fade once (motion-spec §5.4)
+    clearTimeout(themeFade);
+    themeFade = setTimeout(() => html.classList.remove('theme-fade'), M.DUR.enter + 40);
+    applyTheme(theme);
+    render();
   }
   function themeToggle() {
     const dark = currentTheme() === 'dark';
     return `<button class="theme-toggle" data-action="toggleTheme" aria-pressed="${dark}" aria-label="Dark mode" title="${dark ? 'Switch to light mode' : 'Switch to dark mode'}">
       ${dark ? ICON.sun : ICON.moon}<span>${dark ? 'Light' : 'Dark'}</span></button>`;
+  }
+
+  // ------------------------------------------------------------ judge mode --
+  // Presenter tools (clock, sample week, engine output) stay out of the product UI. They appear
+  // with ?demo=1 or after five taps on the version text, for this browser tab only.
+  const JUDGE_KEY = 'sikad-judge';
+  const VERSION = 'SIKAD prototype 0.3';
+  let judge = (() => {
+    try {
+      const q = new URLSearchParams(location.search).get('demo');
+      if (q === '1') sessionStorage.setItem(JUDGE_KEY, '1');
+      if (q === '0') sessionStorage.removeItem(JUDGE_KEY);
+      return sessionStorage.getItem(JUDGE_KEY) === '1';
+    } catch (e) { return /[?&]demo=1\b/.test(location.search); }
+  })();
+  let versionTaps = 0, versionTimer = 0;
+  const versionText = () => `<button class="version" data-action="versionTap">${VERSION}</button>`;
+  const sampleNote = (text) => `<p class="sample-note">${ICON.info}<span>${esc(text)}</span></p>`;
+
+  function judgeDock() {
+    if (!judge) return '';
+    const on = state.onboarded;
+    const running = on && state.active && state.active.status === 'running';
+    return `
+      <aside class="judge-dock ${on ? '' : 'in-setup'}" aria-label="Judge tools">
+        <button class="judge-pill" data-action="dockToggle" aria-expanded="${!!ui.dock}">${ICON.clock}<span>Judge tools</span></button>
+        ${ui.dock ? `<div class="judge-panel">
+          ${on ? `<p class="jd-label">Clock</p>
+            <div class="jd-row">
+              <button class="jd-btn jd-now num" data-action="openClock" aria-label="Set the clock, now ${T.short(now())} ${T.time(now())}">${T.DAY_SHORT[T.dow(now())]} ${T.time(now())}</button>
+              <button class="jd-btn" data-action="advance" data-mins="15" aria-label="Advance clock 15 minutes">+15m</button>
+              <button class="jd-btn" data-action="advance" data-mins="60" aria-label="Advance clock 1 hour">+1h</button>
+              <button class="jd-btn" data-action="nextMorning" aria-label="Jump clock to next morning">Next day</button>
+            </div>` : ''}
+          ${running ? `<div class="jd-row"><button class="jd-btn" data-action="focusSkip" data-mins="5">Skip session ahead 5 min</button></div>` : ''}
+          <p class="jd-label">Sample week</p>
+          <div class="jd-row">
+            <button class="jd-btn" data-action="${on ? 'loadDemoConfirm' : 'loadDemo'}">${on ? "Reset to Alex's week" : "Load Alex's week"}</button>
+            <button class="jd-btn" data-action="openEngine">Engine JSON</button>
+          </div>
+          ${on ? `<details class="jd-scen"><summary>Scenarios</summary>
+            <div class="chips">${D.SCENARIOS.map((sc, i) => `<button class="chip-btn" data-action="scenario" data-i="${i}">${esc(sc.label)}</button>`).join('')}</div></details>` : ''}
+        </div>` : ''}
+      </aside>`;
   }
 
   function setPath(obj, path, value) {
@@ -244,7 +305,7 @@
     const snap = M.capture($app);
     const oldSheet = $sheet.querySelector('.sheet-backdrop:not(.is-closing)');
     const sheetScroll = oldSheet && sheetKey === lastSheetKey ? oldSheet.firstElementChild.scrollTop : 0;
-    $app.innerHTML = state.onboarded ? shell() : onboarding();
+    $app.innerHTML = (state.onboarded ? shell() : onboarding()) + judgeDock();
     if (closing && oldSheet && !M.reduced()) leave(oldSheet, 'is-closing', 160);
     else $sheet.innerHTML = ui.sheet ? sheet() : '';
     if (ui.sheet) {
@@ -271,11 +332,22 @@
     const sig = updateSig();
     M.play($app, snap, { sameView: viewKey === lastViewKey, viewEl: $app.querySelector('main, .onboarding'), washNew: !!sig && sig !== lastWashSig });
     lastViewKey = viewKey; lastWashSig = sig;
+    if (sig !== dismissSig) { clearTimeout(dismissTimer); dismissSig = sig; if (sig) dismissTimer = setTimeout(autoDismissUpdate, 12000); }
     if (state.onboarded) ui.prevPct = S.weeklyProgress(state).percent;
     ui.celebrate = false;
     renderToast();
     tickTimer();
     if (after) after();
+  }
+  /** The Plan-updated card clears itself. Undo lives in the toast, so there is one Undo at a time. */
+  let dismissSig = null, dismissTimer = 0;
+  function autoDismissUpdate() {
+    if (!state.lastUpdate || updateSig() !== dismissSig) return;
+    const el = document.activeElement;
+    const busy = ui.sheet || pending || (el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) || document.querySelector('.update:hover, .update:focus-within, details.add[open]');
+    if (busy) { dismissTimer = setTimeout(autoDismissUpdate, 3000); return; }
+    state.lastUpdate = null;
+    render();
   }
   /** The toast is one node for its whole life, so unrelated renders don't replay its entrance. */
   function renderToast() {
@@ -335,7 +407,7 @@
           <input type="text" placeholder="Your name" data-bind="ob.name" value="${esc(ui.ob.name)}" autocomplete="given-name">
         </label>
         <button class="btn primary block" data-action="obNext">Get started</button>
-        <button class="demo-link" data-action="loadDemo"><span class="demo-tag">DEMO</span> Skip setup and load Alex's week (BSIT 3B)</button>
+        ${versionText()}
       </div>`;
   }
 
@@ -359,13 +431,13 @@
         <span class="upload-icon">${ICON.doc}</span>
         <span><b>Upload COR or schedule photo</b><br><small>PDF or image</small></span>
       </label>
-      ${ob.uploadNote ? `<p class="demo-note"><span class="demo-tag">DEMO</span> ${esc(ob.uploadNote)}</p>` : ''}
+      <button class="text-link" data-action="obSampleCor" ${ob.extracting ? 'disabled' : ''}>${ICON.doc}Try a sample schedule</button>
+      ${ob.uploadNote ? sampleNote(ob.uploadNote) : ob.corText === D.SAMPLE_COR_TEXT ? sampleNote('Sample data. Edit anything.') : ''}
       <details class="paste" ${ob.corText ? 'open' : ''}>
         <summary>Or paste or type it (one class per line)</summary>
-        <textarea rows="6" data-bind="ob.corText" aria-label="Class schedule text" placeholder="IT 302   MON   07:00-10:00   FTF">${esc(ob.corText)}</textarea>
+        <textarea rows="6" data-bind="ob.corText" aria-label="Class schedule text" placeholder="IT 203   MON   07:00-10:00   FTF">${esc(ob.corText)}</textarea>
         <div class="row">
-          <button class="btn small" data-action="obSampleCor">Use sample COR</button>
-          <button class="btn small" data-action="obExtract">Extract classes</button>
+          <button class="btn small" data-action="obExtract" ${ob.extracting ? 'disabled aria-busy="true"' : ''}>${ob.extracting ? '<span class="spinner" aria-hidden="true"></span>Reading…' : 'Extract classes'}</button>
         </div>
       </details>
       ${ob.analysis ? (ob.analysisError
@@ -392,8 +464,14 @@
     }).join('')}</div>`;
   }
 
+  const COMMUTE_PRESETS = [30, 60, 90, 120];
+  const newOrg = () => ({ id: `o${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`, name: '', day: 4, start: '17:00', end: '19:00' });
   function obLifestyle() {
     const ls = ui.ob.ls;
+    if (!Array.isArray(ls.orgs)) ls.orgs = [];             // a draft saved by an older build
+    if (ls.org === 'yes' && !ls.orgs.length) ls.orgs.push(newOrg());
+    const customCommute = ls.commuteCustom || !COMMUTE_PRESETS.includes(Number(ls.commuteMins));
+    const orgClash = (o) => ls.orgs.find((x) => x !== o && x.day === o.day && x.start < o.end && o.start < x.end);
     const ftfDays = [...new Set(ui.ob.classes.filter((c) => c.mode === 'FTF').map((c) => c.day))].sort().map((d) => T.DAY_NAMES[d]);
     const ftfText = ftfDays.length ? `I see you have FTF classes on ${ftfDays.join(' & ')}. ` : '';
     const dayChecks = (path, sel, labelId) => `<div class="chips" role="group" aria-labelledby="${labelId}">${[1, 2, 3, 4, 5, 6, 0].map((d) => {
@@ -410,7 +488,8 @@
       </div>
       <div class="q">
         <h2 id="q-commute">${esc(ftfText)}How long is your commute to campus during rush hour?</h2>
-        ${chips('ls.commuteMins', ls.commuteMins, [[0, 'No commute'], [30, '30 min'], [60, '1 hour'], [90, '1.5 hours']], 'q-commute')}
+        ${chips('ls.commuteMins', customCommute ? 'custom' : ls.commuteMins, [[30, '30 min'], [60, '1 hour'], [90, '1.5 hours'], [120, '2 hours'], ['custom', 'Custom']], 'q-commute')}
+        ${customCommute ? `<label class="inline">Minutes each way <input type="number" inputmode="numeric" min="5" max="240" step="5" value="${ls.commuteMins == null ? '' : esc(ls.commuteMins)}" data-bind="ob.ls.commuteMins" data-type="num" id="commute-custom"></label>` : ''}
       </div>
       <div class="q">
         <h2 id="q-work">Are you a working student?</h2>
@@ -421,12 +500,23 @@
       <div class="q">
         <h2 id="q-org">Are you in a school organization?</h2>
         ${chips('ls.org', ls.org, [['yes', 'Yes'], ['no', 'No']], 'q-org')}
-        ${ls.org === 'yes' ? `<div class="follow"><p class="small">When does your org usually meet?</p>
-          <div class="row time-range"><select data-bind="ob.ls.orgDay" data-type="int" aria-label="Org day">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<option value="${d}" ${d === ls.orgDay ? 'selected' : ''}>${T.DAY_NAMES[d]}</option>`).join('')}</select>
-          <input type="time" value="${ls.orgStart}" data-bind="ob.ls.orgStart" aria-label="Org start"><span>to</span><input type="time" value="${ls.orgEnd}" data-bind="ob.ls.orgEnd" aria-label="Org end"></div></div>` : ''}
+        ${ls.org === 'yes' ? `<div class="follow"><p class="small">Which ones, and when do they usually meet?</p>
+          ${ls.orgs.map((o, i) => {
+            const clash = orgClash(o);
+            const label = `Org ${i + 1}`;
+            return `<div class="org-row">
+              <input placeholder="e.g. Junior Programmers Guild" value="${esc(o.name)}" data-bind="ob.ls.orgs.${i}.name" aria-label="${label} name">
+              <div class="row time-range"><select data-bind="ob.ls.orgs.${i}.day" data-type="int" data-rerender aria-label="${label} day">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<option value="${d}" ${d === o.day ? 'selected' : ''}>${T.DAY_NAMES[d]}</option>`).join('')}</select>
+              <input type="time" value="${o.start}" data-bind="ob.ls.orgs.${i}.start" data-rerender aria-label="${label} start"><span>to</span><input type="time" value="${o.end}" data-bind="ob.ls.orgs.${i}.end" data-rerender aria-label="${label} end"></div>
+              ${clash ? `<p class="field-error">${ICON.alert}<span>Same time as ${esc(clash.name.trim() || 'another org')}. Check the day or time.</span></p>` : ''}
+              ${ls.orgs.length > 1 ? `<button class="btn small ghost" data-action="obRemoveOrg" data-i="${i}" aria-label="Remove ${esc(o.name.trim() || label)}">Remove</button>` : ''}
+            </div>`;
+          }).join('')}
+          <button class="btn small ghost" data-action="obAddOrg">${ICON.plus} Add another org</button></div>` : ''}
       </div>
       <div class="q">
-        <h2 id="q-end">Latest you want anything scheduled?</h2>
+        <h2 id="q-end">Stop scheduling after…</h2>
+        <p class="small muted" id="q-end-help">SIKAD won't plan tasks after this time.</p>
         ${chips('ls.dayEnd', ls.dayEnd, [['21:00', '9:00 PM'], ['22:00', '10:00 PM'], ['23:00', '11:00 PM']], 'q-end')}
       </div>
       <div class="ob-nav">
@@ -438,21 +528,79 @@
 
   function obSync() {
     return `
-      <h1 class="ob-title">Sync your world</h1>
-      <p class="ob-sub">Bring deadlines and events in from where they already live. This step is optional.</p>
+      <h1 class="ob-title">Bring in your due dates</h1>
+      <p class="ob-sub">Connect a calendar or class platform to import deadlines. Skip it if you prefer.</p>
       <div class="integrations">${D.INTEGRATIONS.map((i) => integrationRow(i)).join('')}</div>
-      <p class="demo-note"><span class="demo-tag">DEMO</span> Connections are simulated in this build.</p>
-      <p class="small muted">You can always connect more platforms later in Settings.</p>
+      ${sampleNote('Prototype: connections use sample data.')}
+      <p class="small muted">You can always connect more platforms later in Profile.</p>
       <div class="ob-nav">
         <button class="btn ghost" data-action="obBack">Back</button>
         <button class="btn primary" data-action="obNext">Continue</button>
       </div>`;
   }
-  const INT_ICON = { gcal: 'week', canvas: 'doc', teams: 'braindump', classroom: 'tasks' };
+  // Connection seam. Each platform has an adapter: connect() → Promise<{ account, items: [{ title, due, source, course?, mins? }] }>.
+  // The default adapters return sample items from js/data.js. A real adapter can replace one later
+  // (window.SikadIntegrations.gcal = { connect }) with no change to the UI below.
+  const Adapters = window.SikadIntegrations = window.SikadIntegrations || {};
+  for (const i of D.INTEGRATIONS) {
+    if (Adapters[i.id]) continue;
+    Adapters[i.id] = {
+      connect: () => new Promise((resolve) => setTimeout(() => resolve({
+        account: sampleAccount(),
+        // Work that is already a task (any status) is not offered again.
+        items: (D.SAMPLE_ASSIGNMENTS[i.id] || []).filter((x) => !state.tasks.some((t) => t.title.toLowerCase() === x.title.toLowerCase()))
+          .map((x) => ({ title: x.title, course: x.course, mins: x.mins, due: T.make(2026, ...x.due), source: i.id })),
+      }), 1200)),
+    };
+  }
+  const sampleAccount = () => (state.user.name === 'Alex' ? 'alex.s@up.edu.ph' : 'Sample account');
+  /** A task's source is a platform id; show the platform's name. */
+  const sourceName = (src) => (D.INTEGRATIONS.find((x) => x.id === src) || { name: src }).name;
+  /** What a row shows. The saved boolean is the source of truth for "connected"; the rest is this visit's detail. */
+  function integrationStatus(id) {
+    const st = ui.integrationState[id];
+    if (st && (st.status === 'connecting' || st.status === 'error')) return st;
+    if (state.integrations[id]) return st && st.status === 'connected' ? st : { status: 'connected', account: sampleAccount(), lastSync: null, imported: null };
+    return { status: 'idle' };
+  }
+  const syncedAgo = (ms) => { const m = Math.floor((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : 'earlier today'; };
   function integrationRow(i) {
-    const on = !!state.integrations[i.id];
-    return `<div class="integration"><span class="int-icon" aria-hidden="true">${ICON[INT_ICON[i.id]] || ICON.doc}</span><div><b>${esc(i.name)}</b><br><small>${esc(i.desc)}</small></div>
-      <button class="btn small ${on ? 'connected' : ''}" aria-pressed="${on}" aria-label="${on ? 'Disconnect' : 'Connect'} ${esc(i.name)}" data-action="toggleIntegration" data-id="${i.id}">${on ? `${ICON.check} Connected` : 'Connect'}</button></div>`;
+    const st = integrationStatus(i.id);
+    const name = esc(i.name);
+    let detail = esc(i.desc), button = `<button class="btn small" aria-label="Connect ${name}" data-action="toggleIntegration" data-id="${i.id}">Connect</button>`;
+    if (st.status === 'connecting') {
+      detail = '<span role="status"><span class="spinner" aria-hidden="true"></span>Connecting…</span>';
+      button = `<button class="btn small ghost" aria-label="Cancel connecting ${name}" data-action="cancelIntegration" data-id="${i.id}">Cancel</button>`;
+    } else if (st.status === 'error') {
+      detail = `<span class="int-error" role="alert">${ICON.alert}${esc(st.error)}</span>`;
+      button = `<button class="btn small" aria-label="Try connecting ${name} again" data-action="toggleIntegration" data-id="${i.id}">Try again</button>`;
+    } else if (st.status === 'connected') {
+      detail = `<span class="int-ok num">${ICON.check}${esc(st.account)}${st.lastSync ? ` · Synced ${syncedAgo(st.lastSync)} · ${st.imported} item${st.imported === 1 ? '' : 's'}` : ' · Connected'}</span>`;
+      button = `<button class="btn small ghost" aria-label="Disconnect ${name}" data-action="toggleIntegration" data-id="${i.id}">Disconnect</button>`;
+    }
+    return `<div class="integration is-${st.status}"><span class="int-icon" aria-hidden="true">${ICON[i.icon] || ICON.doc}</span><div><b>${name}</b><br><small>${detail}</small></div>${button}</div>`;
+  }
+  /** After a connection: what came in, for the student to pick from. Nothing is added until they say so. */
+  function importSheet() {
+    const sh = ui.sheet;
+    const n = sh.items.filter((it) => it.include && it.title.trim()).length;
+    return `
+      <h2 id="sheet-title" tabindex="-1">Review what came in</h2>
+      <p class="sheet-sub">${sh.items.length} item${sh.items.length === 1 ? '' : 's'} from ${esc(sh.name)}. Nothing is added until you choose it.</p>
+      <div class="import-list">${sh.items.map((it, k) => `
+        <article class="import-row ${it.include ? '' : 'excluded'}">
+          <label class="toggle"><input type="checkbox" ${it.include ? 'checked' : ''} data-bind="sheet.items.${k}.include" data-rerender aria-label="Add ${esc(it.title)} to plan"></label>
+          <div class="ir-body">
+            <input value="${esc(it.title)}" data-bind="sheet.items.${k}.title" aria-label="Title">
+            <label class="ir-due">Due<input type="datetime-local" value="${it.due != null ? T.toInput(it.due) : ''}" data-bind="sheet.items.${k}.due" data-type="dt"></label>
+            <div class="ir-chips">${it.course ? `<span class="chip">${esc(it.course)}</span>` : ''}<span class="chip src">${esc(sourceName(it.source))}</span></div>
+          </div>
+        </article>`).join('') || '<p class="muted">Nothing new to import.</p>'}</div>
+      <p class="small muted">You can change the time needed on each task after adding it.</p>
+      <div class="sheet-actions">
+        <button class="btn" data-action="closeSheet">Not now</button>
+        <button class="btn primary" data-action="importAdd" ${n ? '' : 'disabled'}>Add ${n || ''} to plan</button>
+      </div>`;
   }
 
   function obDump() {
@@ -463,8 +611,9 @@
       <p class="ob-sub">What's on your plate right now? Don't worry about formatting. Just dump it.</p>
       ${dictaphone('ob.dumpText')}
       <label class="divider" for="dump-ob"><span>or type it out</span></label>
-      <textarea id="dump-ob" rows="5" data-bind="ob.dumpText" placeholder="e.g. Database proposal due Friday, about 3 hours. Study for my math quiz on Wednesday…">${esc(ob.dumpText)}</textarea>
-      <button class="demo-link" data-action="obSampleDump"><span class="demo-tag">DEMO</span> Use Alex's example</button>
+      <textarea id="dump-ob" rows="5" data-bind="ob.dumpText" placeholder="e.g. Class diagram exercise due Friday, about 1 hour. Study for my GE 103 quiz on Wednesday…">${esc(ob.dumpText)}</textarea>
+      <button class="text-link" data-action="obSampleDump">${ICON.doc}Try an example</button>
+      ${ob.dumpText === D.SAMPLE_BRAIN_DUMP ? sampleNote('Sample data. Edit anything.') : ''}
       <div class="ob-nav">
         <button class="btn ghost" data-action="obBack">Back</button>
         <button class="btn primary" data-action="obParseDump">Extract tasks</button>
@@ -485,12 +634,13 @@
   function baselineSummary() {
     const b = state.baseline;
     const ftf = [...new Set(b.classes.filter((c) => c.mode === 'FTF').map((c) => c.day))].sort().map((d) => T.DAY_SHORT[d]);
+    const orgCount = b.recurring.filter((r) => r.kind === 'org').length;
     return `
       <section class="card baseline-sum" aria-labelledby="bs-title">
         <h2 id="bs-title">Your baseline</h2>
         <ul class="plain">
           <li><span>${ICON.lock}<b>${b.classes.length} weekly class${b.classes.length === 1 ? '' : 'es'}</b> (fixed)${ftf.length ? ` · face-to-face on ${ftf.join(', ')}` : ''}</span><button class="btn small" data-action="obGoto" data-step="1" aria-label="Edit classes">Edit</button></li>
-          <li><span class="num"><b>Planning day</b> ${T.hmLabel(b.dayStart)}–${T.hmLabel(b.dayEnd)} · commute ${b.commuteMins ? T.dur(b.commuteMins) : 'none'} · 15 min buffer around tasks</span><button class="btn small" data-action="obGoto" data-step="2" aria-label="Edit routine">Edit</button></li>
+          <li><span class="num"><b>Planning day</b> ${T.hmLabel(b.dayStart)}–${T.hmLabel(b.dayEnd)} · commute ${b.commuteMins ? T.dur(b.commuteMins) : 'none'} · 15 min buffer around tasks${orgCount ? ` · ${orgCount} org${orgCount === 1 ? '' : 's'}` : ''}</span><button class="btn small" data-action="obGoto" data-step="2" aria-label="Edit routine">Edit</button></li>
           <li><span class="num">${b.recurring.length ? b.recurring.map((r) => `${ICON.lock}<b>${esc(r.title)}</b> every ${T.DAY_SHORT[r.day]} ${T.hmLabel(r.start)}–${T.hmLabel(r.end)}`).join('<br>') : 'No other weekly commitments'}</span><button class="btn small" data-action="obGoto" data-step="2" aria-label="Edit weekly commitments">Edit</button></li>
         </ul>
       </section>`;
@@ -548,6 +698,8 @@
   };
   function dictaphone(path) {
     const d = ui.dict && ui.dict.path === path ? ui.dict : null;
+    // Setup has its own "Try an example" link under the text box, so the two are one control there.
+    const sample = path === 'ob.dumpText' ? '' : `<button class="text-link" data-action="dictDemo" data-path="${path}">${ICON.doc}Try an example</button>`;
     if (d && d.state === 'recording') {
       return `<div class="dict recording">
         <div class="dict-status" role="status"><span class="rec-dot" aria-hidden="true"></span><b>Recording</b><span id="dict-time" class="num">0:00</span></div>
@@ -556,13 +708,13 @@
       </div>`;
     }
     const note = d && d.note === 'transcribed' ? `<p class="voice-note">${ICON.check}<span>Transcribed by your browser. Check the text below before sending.</span></p>`
-      : d && d.note === 'demo' ? `<p class="voice-note"><span class="demo-tag">DEMO</span><span>Sample transcript inserted. It did not come from your microphone.</span></p>`
+      : d && d.note === 'demo' ? `<p class="voice-note">${ICON.info}<span>Sample data. Edit anything.</span></p>`
       : d && d.note === 'cancelled' ? `<p class="voice-note">${ICON.info}<span>Recording cancelled. Nothing was added.</span></p>`
       : d && d.error ? `<p class="voice-note is-error" role="alert">${ICON.alert}<span>${esc(d.error)}</span></p>` : '';
     if (!speechSupported()) {
       return `<div class="dict unsupported">
         <p class="voice-note">${ICON.info}<span>Voice capture needs a browser with speech recognition (Chrome or Edge). This browser does not have it, so type below instead.</span></p>
-        <button class="demo-link" data-action="dictDemo" data-path="${path}"><span class="demo-tag">DEMO</span> Insert a sample transcript</button>
+        ${sample}
         ${note}
       </div>`;
     }
@@ -570,7 +722,7 @@
       <button class="mic" data-action="dictStart" data-path="${path}" aria-label="Start recording">${ICON.mic}</button>
       <div class="mic-label">Start recording</div>
       ${note}
-      ${d && d.error ? `<button class="demo-link" data-action="dictDemo" data-path="${path}"><span class="demo-tag">DEMO</span> Insert a sample transcript</button>` : ''}
+      ${d && d.error ? sample : ''}
     </div>`;
   }
   /**
@@ -637,9 +789,11 @@
     return `
       <div class="screen app">
         <button class="skip-link" data-action="skipToMain">Skip to main content</button>
-        ${clockBar()}
-        <main class="view" id="main" tabindex="-1">${views[ui.tab]()}</main>
+        <main class="view view-${ui.tab}" id="main" tabindex="-1">
+          ${ui.offline ? `<p class="offline-banner" role="status">${ICON.info}<span>You're offline. Your plan still works. Syncing resumes when you're back.</span></p>` : ''}
+          ${views[ui.tab]()}</main>
         <nav class="bottom-nav" aria-label="Main">
+          <div class="rail-brand" aria-hidden="true">${LOGO}<span>SIKAD</span></div>
           ${navBtn('home', 'Home', ICON.home)}
           ${navBtn('week', 'Overview', ICON.week)}
           <button class="fab" data-action="openDump" aria-label="Ask SIKAD: ask about your plan, add a task or report a change"><span class="fab-circle">${ICON.braindump}</span><span class="fab-label">Ask SIKAD</span></button>
@@ -650,36 +804,27 @@
   }
   const navBtn = (tab, label, icon) => `<button class="nav-btn ${ui.tab === tab ? 'on' : ''}" data-action="tab" data-tab="${tab}" ${ui.tab === tab ? 'aria-current="page"' : ''}>${icon}<span>${label}</span></button>`;
 
-  /** Demo-only chrome (design.md §7.12): dashed, mono-labelled, never mistaken for product UI. */
-  function clockBar() {
-    return `
-      <div class="clock-bar" role="group" aria-label="Demo clock (demo only)">
-        <span class="demo-tag" aria-hidden="true">DEMO</span>
-        <button class="clock-now" data-action="openClock" aria-label="Set the demo clock, now ${T.short(now())} ${T.time(now())}"><b class="num">${T.DAY_SHORT[T.dow(now())]} ${T.time(now())}</b></button>
-        <button class="clock-step" data-action="advance" data-mins="15" aria-label="Advance demo clock 15 minutes">+15m</button>
-        <button class="clock-step" data-action="advance" data-mins="60" aria-label="Advance demo clock 1 hour">+1h</button>
-        <button class="clock-step" data-action="nextMorning" aria-label="Jump demo clock to next morning">Next day</button>
-      </div>`;
-  }
-
   // ------------------------------------------------------------------ HOME --
   function homeView() {
     if (ui.focusOnly) {
-      return `<header class="home-head">${themeToggle()}<div class="eyebrow">${T.date(now())}</div><h1>One thing at a time</h1></header>
+      return `<header class="home-head has-toggle">${themeToggle()}<div class="eyebrow">${T.date(now())}</div><h1>One thing at a time</h1></header>
         ${focusCard()}
         <button class="btn ghost block" data-action="showFullPlan" data-flip="full-plan">Show my full plan</button>`;
     }
     return `
-      <header class="home-head">${themeToggle()}
+      <header class="home-head has-toggle">${themeToggle()}
         <div class="eyebrow">${T.date(now())}</div>
         <h1>Hey, ${esc(state.user.name || 'there')}</h1>
       </header>
+      <div class="cols">
+      <div class="col-a">
       ${updateCard()}
       ${checkinCards()}
       ${focusCard()}
       <div id="attention" tabindex="-1">${attentionBlock()}</div>
       ${weekCard()}
-      ${fitCard()}
+      </div>
+      <div class="col-b">
       <section class="section">
         <div class="section-head" data-flip="tl-head">
           <h2>${ui.dayView === 'today' ? "Today's timeline" : "Tomorrow's preview"}</h2>
@@ -689,7 +834,9 @@
           </div>
         </div>
         ${timeline(T.dayStart(now()) + (ui.dayView === 'tomorrow' ? T.DAY : 0))}
-      </section>`;
+      </section>
+      </div>
+      </div>`;
   }
 
   const ACTION_WORD = { RESCHEDULE: 'Moved', SCHEDULE: 'Added', COMPLETE: 'Completed', CANCEL: 'Removed', UNSCHEDULED: "Couldn't fit" };
@@ -723,7 +870,6 @@
         ${short ? `<p class="small upd-warn">${ICON.hourglass}<span>Some work doesn't fit. See "Not enough time" below.</span></p>` : ''}
         <p class="small upd-fixed">${ICON.lock}<span>Fixed commitments unchanged${skipped ? ', except the one you chose to cancel or skip' : ''}.</span></p>
         ${next ? `<p class="small upd-next">${ICON.step}<span>Next: <b>${esc(next.title)}</b> · <span class="num">${T.rel(next.start, now())} ${T.timeShort(next.start)}</span></span></p>` : ''}
-        ${undoSnap ? `<div class="row end"><button class="btn small" data-action="undo">${ICON.undo} Undo this change</button></div>` : ''}
       </section>`;
   }
 
@@ -740,7 +886,7 @@
     }).join('');
   }
 
-  // "Start Database Proposal" reads well; "Start Study for…" doesn't (copy only).
+  // "Start Class Diagram Exercise" reads well; "Start Study for…" doesn't (copy only).
   const STARTS_WITH_VERB = /^(study|buy|review|write|read|prepare|finish|do|practice|submit|pay|clean|pick|call|email|send|make|work|plan|draft|build|test|rehearse|outline)\b/i;
 
   function focusCard() {
@@ -760,8 +906,8 @@
     const beforeNext = E.occurrences(state, T.dayStart(n)).find((o) => !o.soft && o.start > n && o.start < next.start);
     const startsNow = next.start <= n + 15 * T.MIN;
     const why = E.explain(state, state.plan, next, n);
-    const sessionTag = next.sessions > 1 ? `<span class="chip">Session ${next.session}/${next.sessions}</span>` : '';
-    const longTag = next.mins >= 90 ? '<span class="chip">Long session</span>' : '';
+    const extra = [next.sessions > 1 ? `Session ${next.session} of ${next.sessions}` : '', next.mins >= 90 ? 'Long session' : ''].filter(Boolean)
+      .map((x) => ` · <span class="nowrap">${x}</span>`).join('');
     const durLabel = task && task.isAiEstimate ? `<span class="est-dur">≈ ${T.dur(next.mins)}</span>` : T.dur(next.mins);
     return `
       <section class="focus ${active ? 'active' : ''}" aria-labelledby="focus-title" data-flip="focus" data-sid="${esc(next.id)}">
@@ -770,11 +916,11 @@
         ${nowFixed && !active ? `<div class="focus-now">${ICON.lock}<span>Right now: ${esc(nowFixed.title)} until <span class="num">${T.timeShort(nowFixed.end)}</span></span></div>` : ''}
         <h2 id="focus-title" tabindex="-1"><span class="strike">${!active && startsNow && !STARTS_WITH_VERB.test(main) ? 'Start ' : ''}${esc(main)}</span></h2>
         ${part ? `<div class="focus-part"><span class="strike">— ${esc(part)}</span></div>` : ''}
-        <div class="focus-time num">${ICON.clock}<span><span class="nowrap">${T.rel(next.start, n)} · ${T.range(next.start, next.end)}</span> · <span class="nowrap">${durLabel}</span></span></div>
-        <div class="focus-tags">${task && task.context ? `<span class="chip">${esc(task.context)}</span>` : ''}${task ? priChip(task.priority) : ''}${sessionTag}${longTag}${task && task.isAiEstimate ? estChip() : ''}</div>
+        <div class="focus-time num">${ICON.clock}<span><span class="nowrap">${T.rel(next.start, n)} · ${T.range(next.start, next.end)}</span> · <span class="nowrap">${durLabel}</span>${extra}</span></div>
+        <div class="focus-tags">${task && task.context ? `<span class="chip">${esc(task.context)}</span>` : ''}${task ? priChip(task.priority) : ''}${task && task.isAiEstimate ? estChip() : ''}</div>
         ${beforeNext && !active ? `<div class="focus-before">${ICON.lock}<span>Before that: ${esc(beforeNext.title)} · <span class="num">${T.range(beforeNext.start, beforeNext.end)}</span></span></div>` : ''}
         </div>
-        ${active ? focusActive(next, task) : ui.focusPick === next.id ? focusPicker(next, task) : `<div data-enter="fm:idle:${esc(next.id)}">
+        ${active ? (ui.focusPick === next.id && state.active.status !== 'awaiting' ? focusPicker(next, task) : focusActive(next, task)) : `<div data-enter="fm:idle:${esc(next.id)}">
           ${why ? `<div class="why"><b>Why this?</b> ${esc(why)}</div>` : ''}
           <div class="focus-actions">
             <button class="btn primary" data-action="start" data-id="${next.id}">${ICON.play} Start task</button>
@@ -801,10 +947,10 @@
     };
   }
 
-  /** Step 1 of Focus Mode: suggest a working method, explain why, and let the student pick another or none. */
+  /** Opened with "Change" during a session: the suggested working method, why, and the other options. */
   function focusPicker(session, task) {
     const rec = F.recommend(focusContext(session, task));
-    const chosen = ui.focusMethod || rec.method;
+    const chosen = ui.focusMethod || state.active.method;
     const last = state.prefs.focusMethod;
     return `
       <div class="method" role="group" aria-labelledby="method-title" data-enter="fm:picker">
@@ -821,13 +967,13 @@
         </div>
         <p class="method-note">A suggestion from this session's length and your schedule. Pick whatever suits you.</p>
         <div class="focus-actions">
-          <button class="btn primary" data-action="focusBegin" data-id="${session.id}">${ICON.play} Start session</button>
-          <button class="btn on-dark" data-action="focusCancel">Back</button>
+          <button class="btn primary" data-action="focusBegin" data-id="${session.id}">Use this method</button>
+          <button class="btn on-dark" data-action="focusCancel">Back to timer</button>
         </div>
       </div>`;
   }
 
-  /** Step 2: the running session (timer, Pause/Resume, End), then the "is it complete?" question. */
+  /** The running session (timer, Pause/Resume, End), then the "is it complete?" question. */
   function focusActive(session, task) {
     const a = state.active;
     const t = F.timer(a, S.focusElapsedMs(a));
@@ -858,7 +1004,8 @@
     const paused = a.status === 'paused';
     return `
       <div class="session" data-enter="fm:session">
-        <div class="session-method"><b>${esc(m.name)}</b><span id="focus-phase">${esc(paused ? 'Paused' : t.label)}</span></div>
+        <div class="session-method"><div class="sm-name"><b>Method: ${esc(m.name)}</b> · <button class="link on-dark-link" data-action="focusChange" aria-label="Change working method">Change</button></div><span id="focus-phase">${esc(paused ? 'Paused' : t.label)}</span></div>
+        ${ui.focusWhy && ui.focusWhy.id === session.id && ui.focusWhy.method === a.method ? `<p class="session-why">${esc(ui.focusWhy.text)}</p>` : ''}
         <div class="timer-row"><span id="focus-timer" class="num" role="timer" aria-label="${t.remainingMs == null ? 'Time focused' : 'Time left'}">${F.clock(t.remainingMs == null ? t.elapsedMs : t.remainingMs)}</span>
           <span class="timer-note">${t.remainingMs == null ? 'focused so far' : t.phase === 'break' ? 'of break left' : 'left'}</span></div>
         ${steps ? `<ol class="session-steps">${steps.map((st) => `<li>${esc(st.title)} <span class="num">${T.dur(st.mins)}</span></li>`).join('')}</ol>` : ''}
@@ -869,7 +1016,6 @@
           <button class="btn on-dark" data-action="focusEnd" aria-label="Stop early: end this session and say how it went">Stop early</button>
         </div>
         <button class="link on-dark-link spot-toggle" data-action="spotlightToggle" aria-pressed="${!ui.spotlightOff}">${ui.spotlightOff ? 'Dim everything else' : 'Show my plan'}</button>
-        <button class="demo-skip" data-action="focusSkip" data-mins="5"><span class="demo-tag">DEMO</span> Skip ahead 5 min</button>
       </div>`;
   }
 
@@ -932,37 +1078,21 @@
   function weekCard() {
     const w = S.weeklyProgress(state);
     const outcomeWord = { complete: 'Completed', partial: 'Partly done', unfinished: 'Not finished yet' };
-    const nextWeekMins = state.plan.filter((x) => x.start >= w.weekEnd).reduce((a, x) => a + x.mins, 0);
     const from = ui.prevPct == null ? w.percent : ui.prevPct;
     const sessions = state.focusLog.slice(-5).reverse();
     const win = ui.celebrate;
+    // "Does it all fit?" in one word. Weekly totals can fit while a single deadline doesn't; never say "Fits" when work is unscheduled.
+    const cap = E.capacity(state, now());
+    const short = cap.required > cap.free, unsched = (state.unscheduled || []).length > 0;
+    const verdict = short ? `${ICON.alert}${T.dur(cap.required - cap.free)} short` : unsched ? `${ICON.hourglass}Not all of it fits` : `${ICON.check}Fits`;
+    const done = w.totalMins ? `<b>${T.dur(w.doneMins)}</b> of <b>${T.dur(w.totalMins)}</b> done` : 'Nothing left to do this week';
     return `
       <section class="card week ${win ? 'win' : ''}" aria-labelledby="week-title" data-flip="week">
         <div class="fit-head"><h2 id="week-title">This week</h2>${w.totalMins ? `<span class="week-pct num">${win ? ICON.check : ''}${w.percent}%</span>` : ''}</div>
-        ${w.totalMins ? `
-          <div class="bar week-bar" role="img" aria-label="${T.dur(w.doneMins)} done of ${T.dur(w.totalMins)} planned this week"><span style="--from:${from}%;width:${w.percent}%"></span></div>
-          <p class="small num week-line"><b>${T.dur(w.doneMins)}</b> done of <b>${T.dur(w.totalMins)}</b> planned this week${w.tasksDone ? ` · <b>${w.tasksDone}</b> task${w.tasksDone === 1 ? '' : 's'} finished` : ''}</p>`
-        : `<p class="small week-line">No work is planned for the rest of this week${nextWeekMins ? `. Next week has <b class="num">${T.dur(nextWeekMins)}</b> planned` : ''}.</p>`}
-        <p class="small num week-line"><b>${w.focusSessions}</b> focus session${w.focusSessions === 1 ? '' : 's'} this week${w.focusedMins ? ` · ${T.dur(w.focusedMins)} focused` : ''}</p>
-        <p class="small muted">Done work compared with what is planned for Monday to Sunday right now. Moving work to another day changes the plan, not your progress.</p>
+        ${w.totalMins ? `<div class="bar week-bar" role="img" aria-label="${T.dur(w.doneMins)} done of ${T.dur(w.totalMins)} planned this week"><span style="--from:${from}%;width:${w.percent}%"></span></div>` : ''}
+        <p class="small num week-line">${done} · <b>${w.focusSessions}</b> session${w.focusSessions === 1 ? '' : 's'} · <span class="fit-verdict ${short || unsched ? 'bad' : 'good'}" title="${T.dur(cap.required)} of work due by ${T.DAY_SHORT[T.dow(cap.until)]}, ${approx(cap.free)} open">${verdict}</span></p>
         ${sessions.length ? `<details class="session-log"><summary>${ICON.chevron}Recent focus sessions (${state.focusLog.length})</summary>
           <ul class="plain small num">${sessions.map((f) => `<li><span><b>${esc(f.title)}</b><br>${T.short(f.at)} · ${esc((F.METHODS[f.method] || F.METHODS.none).name)} · ${T.dur(Math.max(1, f.focusedMins))} focused · ${outcomeWord[f.outcome] || f.outcome}</span></li>`).join('')}</ul></details>` : ''}
-      </section>`;
-  }
-
-  /** "Does it all fit?" — optional workload visual (story §22), kept below the Focus Card (design.md §7.7). */
-  function fitCard() {
-    const cap = E.capacity(state, now());
-    const short = cap.required > cap.free;
-    // Weekly totals can fit while a single deadline doesn't; never say "Fits" when work is unscheduled.
-    const unsched = (state.unscheduled || []).length > 0;
-    const pct = cap.free ? Math.min(100, Math.round((cap.required / cap.free) * 100)) : 100;
-    const verdict = short ? `${ICON.alert}${T.dur(cap.required - cap.free)} short` : unsched ? `${ICON.hourglass}Not all of it` : `${ICON.check}Fits`;
-    return `
-      <section class="card fit" aria-labelledby="fit-title" data-flip="fit">
-        <div class="fit-head"><h2 id="fit-title">Does it all fit?</h2><span class="fit-verdict ${short || unsched ? 'bad' : 'good'}">${verdict}</span></div>
-        <div class="bar ${short || unsched ? 'over' : ''}" role="img" aria-label="${T.dur(cap.required)} of work against ${approx(cap.free)} of open time"><span style="width:${pct}%"></span></div>
-        <div class="fit-legend small num"><span><b>${T.dur(cap.required)}</b> of work due by ${T.DAY_SHORT[T.dow(cap.until)]}</span><span><b>${approx(cap.free)}</b> open</span></div>
       </section>`;
   }
 
@@ -1042,7 +1172,9 @@
       else if (isNext) chips += '<span class="chip now">Next</span>';
       if (moved) chips += '<span class="chip moved">Moved</span>';
       if (t) chips += priChip(t.priority);
-      if (est) chips += estChip();
+      // Three chips at most (state, state, priority). The ≈ and this text still mark the estimate.
+      if (est && (chips.match(/class="chip/g) || []).length < 3) chips += estChip();
+      else if (est) meta += ' · AI estimate';
       label = `${it.title}, task${est ? ', AI estimate' : ''}, ${range}`;
     } else if (it.kind === 'done') {
       icon = ICON.check; node = 'n-done';
@@ -1067,40 +1199,136 @@
   }
 
   // ------------------------------------------------------------------ WEEK --
+  const WEEK = 7 * T.DAY;
+  const weekStartOf = (ms) => T.dayStart(ms) - ((T.dow(ms) + 6) % 7) * T.DAY;   // weeks run Monday to Sunday
+  const monthDay = (ms) => { const x = T.parts(ms); return `${T.MONTHS[x.mo - 1].slice(0, 3)} ${x.d}`; };
+  /** "Oct 5–11", or "Sep 28 – Oct 4" when the week crosses a month. */
+  const weekLabel = (ws) => (T.parts(ws).mo === T.parts(ws + 6 * T.DAY).mo ? `${monthDay(ws)}–${T.parts(ws + 6 * T.DAY).d}` : `${monthDay(ws)} – ${monthDay(ws + 6 * T.DAY)}`);
+  /** Which week and day Overview shows. Back to the earliest saved day (8 weeks at most), forward two weeks. */
+  function weekState() {
+    const today = T.dayStart(now()), cur = weekStartOf(today);
+    let earliest = cur;
+    for (const k of Object.keys(state.daySnapshots || {})) if (state.daySnapshots[k].blocks.length) earliest = Math.min(earliest, T.fromISO(k + 'T00:00'));
+    for (const h of state.history) earliest = Math.min(earliest, T.dayStart(h.start));
+    const min = Math.max(cur - 8 * WEEK, weekStartOf(earliest)), max = cur + 2 * WEEK;
+    const start = Math.min(max, Math.max(min, ui.weekStart == null ? cur : ui.weekStart));
+    const inWeek = (d) => d != null && d >= start && d < start + WEEK;
+    const sel = inWeek(ui.weekDay) ? ui.weekDay : inWeek(today) ? today : start;
+    return { today, cur, min, max, start, sel };
+  }
+
   function weekView() {
     const n = now();
-    const today = T.dayStart(n);
-    const sel = ui.weekDay != null && ui.weekDay >= today ? ui.weekDay : today;
-    const days = Array.from({ length: 7 }, (_, i) => today + i * T.DAY);
+    const w = weekState();
+    const { today, sel } = w;
     const b = state.baseline;
+    const isPast = w.start < w.cur, isCurrent = w.start === w.cur;
+    const days = Array.from({ length: 7 }, (_, i) => w.start + i * T.DAY);
     const stats = days.map((d) => {
-      const planned = state.plan.filter((s) => T.dayStart(s.start) === d).reduce((a, s) => a + s.mins, 0);
-      const free = E.freeSlots(state, Math.max(n, T.at(d, b.dayStart)), T.at(d, b.dayEnd)).reduce((a, s) => a + (s.end - s.start) / T.MIN, 0);
-      return { d, planned, free };
+      if (d < today) {                                       // a finished day: what was planned, and how much of it got done
+        const sum = S.daySummary(state, T.key(d));
+        return { d, past: true, sum, planned: sum.plannedMins, load: sum.plannedMins ? Math.round((sum.doneMins / sum.plannedMins) * 100) : 0 };
+      }
+      const planned = state.plan.filter((x) => T.dayStart(x.start) === d).reduce((a, x) => a + x.mins, 0);
+      const free = E.freeSlots(state, Math.max(n, T.at(d, b.dayStart)), T.at(d, b.dayEnd)).reduce((a, x) => a + (x.end - x.start) / T.MIN, 0);
+      return { d, planned, free, load: planned + free ? Math.round((planned / (planned + free)) * 100) : 0 };
     });
-    const cap = E.capacity(state, n, today + 7 * T.DAY);
-    const over = cap.required > cap.free;
-    const pct = cap.free ? Math.min(100, Math.round((cap.required / cap.free) * 100)) : 100;
     const compact = (m) => (m ? `${Math.round((m / 60) * 10) / 10}h` : '—');
+    const weeksAway = Math.round((w.start - w.cur) / WEEK);
+    const relWeek = weeksAway === 0 ? 'This week' : weeksAway === -1 ? 'Last week' : weeksAway === 1 ? 'Next week' : weeksAway < 0 ? `${-weeksAway} weeks ago` : `In ${weeksAway} weeks`;
+
+    let progress;
+    if (isPast) {
+      const sums = stats.map((st) => st.sum);
+      const planned = sums.reduce((a, x) => a + x.plannedMins, 0), doneMins = sums.reduce((a, x) => a + x.doneMins, 0);
+      const missed = sums.reduce((a, x) => a + x.missed.length, 0), moved = sums.reduce((a, x) => a + x.moved.length, 0);
+      const anyHistory = state.history.some((h) => h.start >= w.start && h.start < w.start + WEEK);
+      const pct = planned ? Math.round((doneMins / planned) * 100) : 0;
+      progress = planned || anyHistory ? `
+        <section class="card fit" aria-labelledby="cap-title" data-flip="cap">
+          <div class="fit-head"><h2 id="cap-title">Done vs. planned</h2><span class="week-pct num">${pct}%</span></div>
+          <div class="bar" role="img" aria-label="${T.dur(doneMins)} done of ${T.dur(planned)} planned that week"><span style="width:${pct}%"></span></div>
+          <p class="small num">Done <b>${T.dur(doneMins)}</b> of <b>${T.dur(planned)}</b> planned · ${missed} missed · ${moved} moved</p>
+        </section>` : `
+        <section class="card fit" data-flip="cap"><p class="muted empty-week">Nothing saved for this week.</p></section>`;
+    } else {
+      const until = isCurrent ? today + WEEK : w.start + WEEK;
+      const cap = E.capacity(state, n, until);
+      const over = cap.required > cap.free;
+      const pct = cap.free ? Math.min(100, Math.round((cap.required / cap.free) * 100)) : 100;
+      const span = isCurrent ? 'in the next 7 days' : `between now and ${T.short(until - T.DAY)}`;
+      progress = `
+        <section class="card fit" aria-labelledby="cap-title" data-flip="cap">
+          <div class="fit-head"><h2 id="cap-title">Available vs. required</h2><span class="fit-verdict ${over ? 'bad' : 'good'}">${over ? `${ICON.alert}Over capacity` : `${ICON.check}Fits`}</span></div>
+          <div class="bar ${over ? 'over' : ''}" role="img" aria-label="${T.dur(cap.required)} of tasks against ${approx(cap.free)} of usable time"><span style="width:${pct}%"></span></div>
+          <p class="small num">You have <b>${approx(cap.free)}</b> of usable time ${span} and <b>${T.dur(cap.required)}</b> of tasks due in that window.</p>
+        </section>`;
+    }
     return `
-      <header class="home-head">${themeToggle()}<div class="eyebrow">Next 7 days</div><h1>Overview</h1></header>
-      <section class="card fit" aria-labelledby="cap-title" data-flip="cap">
-        <div class="fit-head"><h2 id="cap-title">Available vs. required</h2><span class="fit-verdict ${over ? 'bad' : 'good'}">${over ? `${ICON.alert}Over capacity` : `${ICON.check}Fits`}</span></div>
-        <div class="bar ${over ? 'over' : ''}" role="img" aria-label="${T.dur(cap.required)} of tasks against ${approx(cap.free)} of usable time"><span style="width:${pct}%"></span></div>
-        <p class="small num">You have <b>${approx(cap.free)}</b> of usable time in the next 7 days and <b>${T.dur(cap.required)}</b> of tasks due in that window.</p>
-      </section>
+      <header class="home-head week-head">
+        <h1>Overview</h1>
+        <div class="week-nav" role="group" aria-label="Week shown">
+          <button class="icon-btn" data-action="weekNav" data-v="-1" aria-label="Previous week" ${w.start <= w.min ? 'disabled' : ''}>${ICON.back}</button>
+          <div class="week-label" aria-live="polite"><b class="num">${weekLabel(w.start)}</b><span>${relWeek}</span></div>
+          <button class="icon-btn" data-action="weekNav" data-v="1" aria-label="Next week" ${w.start >= w.max ? 'disabled' : ''}>${ICON.chevron}</button>
+          ${isCurrent ? '' : '<button class="btn small" data-action="weekNav" data-v="0">This week</button>'}
+        </div>
+      </header>
+      <div class="cols week-body">
+      <div class="col-a">
+      ${progress}
       <div class="daystrip" role="tablist" aria-label="Pick a day">
         ${stats.map((st) => {
-          const load = st.planned + st.free ? Math.round((st.planned / (st.planned + st.free)) * 100) : 0;
           const name = st.d === today ? 'Today' : T.DAY_SHORT[T.dow(st.d)];
-          return `<button class="daychip ${st.d === sel ? 'on' : ''}" data-action="pickDay" data-day="${st.d}" role="tab" aria-selected="${st.d === sel}"
-            aria-label="${T.date(st.d)}: ${st.planned ? T.dur(st.planned) + ' planned' : 'nothing planned'}, ${approx(st.free)} open">
+          const detail = st.past ? `${st.planned ? T.dur(st.planned) + ' planned' : 'nothing planned'}, ${T.dur(st.sum.doneMins)} done`
+            : `${st.planned ? T.dur(st.planned) + ' planned' : 'nothing planned'}, ${approx(st.free)} open`;
+          return `<button class="daychip ${st.d === sel ? 'on' : ''} ${st.past ? 'is-past' : ''}" data-action="pickDay" data-day="${st.d}" role="tab" aria-selected="${st.d === sel}"
+            aria-label="${T.date(st.d)}: ${detail}">
             <span>${name}</span><b class="num">${T.parts(st.d).d}</b>
-            <i class="load" style="--load:${load}%"></i><small class="num">${compact(st.planned)}</small></button>`;
+            <i class="load" style="--load:${st.load}%"></i><small class="num">${compact(st.planned)}</small></button>`;
         }).join('')}
       </div>
-      <p class="small muted strip-legend">Bar and hours = time planned for tasks that day.</p>
-      <section class="section"><div class="section-head"><h2>${T.date(sel)}</h2></div>${timeline(sel)}</section>`;
+      <p class="small muted strip-legend">${isPast ? 'Hours = time planned that day. Bar = how much of it got done.' : 'Bar and hours = time planned for tasks that day.'}</p>
+      </div>
+      <div class="col-b">
+      <section class="section"><div class="section-head"><h2>${T.date(sel)}</h2></div>${sel < today ? pastTimeline(sel) : timeline(sel)}</section>
+      </div>
+      </div>`;
+  }
+
+  /** A finished day: fixed commitments, what was planned (Done / Missed / Moved), and work done that wasn't planned. */
+  function pastTimeline(dayMs) {
+    const sum = S.daySummary(state, T.key(dayMs));
+    const items = [];
+    for (const o of E.occurrences(state, dayMs)) if (!o.soft) items.push({ kind: o.kind, fixed: true, title: o.title, start: o.start, end: o.end, mode: o.mode, occ: o });
+    for (const blk of sum.blocks) items.push({ kind: 'planned', title: blk.title, start: blk.start, end: blk.end, block: blk });
+    const blockIds = new Set(sum.blocks.map((x) => x.id)), doneTasks = new Set(sum.done.map((x) => x.taskId));
+    for (const h of state.history.filter((x) => x.doneAt != null && T.dayStart(x.doneAt) === dayMs)) {
+      if (blockIds.has(String(h.id).split('@')[0]) || doneTasks.has(h.taskId)) continue;
+      items.push({ kind: 'unplanned', title: h.title, start: h.start, end: h.end });
+    }
+    items.sort((a, c) => a.start - c.start);
+    if (!items.length) return '<p class="muted empty-tl">Nothing saved for this day.</p>';
+    return `<ol class="timeline" aria-label="What happened on ${T.date(dayMs)}">${items.map(pastRow).join('')}</ol>`;
+  }
+  function pastRow(it) {
+    const range = T.range(it.start, it.end);
+    let icon = ICON.lock, node = 'n-fixed', meta = range, chip = '', cls = `k-${it.kind} fixed`;
+    if (it.fixed) {
+      meta += ` · ${it.kind === 'class' ? `Class · ${it.mode === 'FTF' ? 'Face-to-face' : 'Online'}` : it.occ.source === 'temporary' ? 'One-time' : 'Weekly'}`;
+    } else if (it.kind === 'unplanned') {
+      icon = ICON.check; node = 'n-done'; cls = 'k-done';
+      meta = it.start === it.end ? `Completed · ${T.time(it.start)}` : range;
+      chip = `<span class="chip st-done">${ICON.check}Done (unplanned)</span>`;
+    } else {
+      const blk = it.block, mins = T.dur((it.end - it.start) / T.MIN);
+      if (blk.done) { icon = ICON.check; node = 'n-done'; cls = 'k-done'; meta += ` · ${mins}`; chip = `<span class="chip st-done">${ICON.check}Done</span>`; }
+      else if (blk.moved) { icon = ICON.snooze; node = 'n-flex'; cls = 'k-moved'; meta += ` · ${mins} · moved to another time`; chip = '<span class="chip moved">Moved</span>'; }
+      else { icon = ICON.undo; node = 'n-missed'; cls = 'k-missed'; meta += ` · ${mins} · not marked done`; chip = `<span class="chip st-missed">${ICON.undo}Missed</span>`; }
+    }
+    return `<li class="tl-item is-history ${cls}"><div class="tl-time num">${T.timeShort(it.start)}</div><div class="tl-rail" aria-hidden="true"><span class="tl-node ${node}"></span></div>
+      <div class="tl-card"><div class="tl-title"><span class="tl-icon" aria-hidden="true">${icon}</span><span class="tl-name">${esc(it.title)}</span></div>
+        <div class="tl-meta num">${meta}</div>${chip ? `<div class="tl-chips">${chip}</div>` : ''}</div></li>`;
   }
 
   // ----------------------------------------------------------------- TASKS --
@@ -1112,7 +1340,7 @@
     const upcoming = open.filter((t) => !attention.includes(t)).sort((a, b) => a.deadline - b.deadline);
     const done = state.tasks.filter((t) => t.status === 'done');
     return `
-      <header class="home-head">${themeToggle()}<div class="eyebrow">${open.length} open · ${done.length} done</div><h1>Tasks</h1></header>
+      <header class="home-head"><h1>Tasks</h1><p class="head-sub num">${open.length} open · ${done.length} done</p></header>
       <button class="btn block" data-action="newTask">${ICON.plus} Add a task manually</button>
       ${attention.length ? `<h2 class="list-h" data-flip="lh:attention">Needs attention</h2>${attention.map(taskCard).join('')}` : ''}
       ${upcoming.length ? `<h2 class="list-h" data-flip="lh:next">Up next</h2>${upcoming.map(taskCard).join('')}` : ''}
@@ -1133,7 +1361,7 @@
     return `
       <button class="task-card ${t.status}" data-action="openTask" data-id="${t.id}" data-flip="t:${t.id}">
         <div class="tc-head"><h3><span class="tc-icon" aria-hidden="true">${t.status === 'done' ? ICON.check : ICON.task}</span>${esc(t.title)}</h3>${t.status === 'done' ? '' : priChip(t.priority)}</div>
-        ${t.context ? `<div class="tc-context">${esc(t.context)}</div>` : ''}
+        ${t.context || t.source ? `<div class="tc-context">${esc(t.context || '')}${t.source ? `<span class="chip src">${esc(sourceName(t.source))}</span>` : ''}</div>` : ''}
         <dl class="tc-meta num">
           <div><dt>${isExam ? 'Exam' : 'Due'}</dt><dd class="${overdue ? 'overdue' : ''}">${overdue ? `${ICON.alert}<b>Overdue</b> · ` : ''}${t.deadline != null ? (isExam ? T.short(t.deadline) : `${T.short(t.deadline)}, ${T.time(t.deadline)}`) : 'Not set'}</dd></div>
           <div><dt>Est</dt><dd>${est}${rem < total && t.status !== 'done' ? ` <span class="muted">(${T.dur(rem)} left)</span>` : ''}</dd></div>
@@ -1153,27 +1381,27 @@
       return o;
     };
     const classes = b.classes.slice().sort((a, c) => ((a.day + 6) % 7) - ((c.day + 6) % 7) || T.hmToMins(a.start) - T.hmToMins(c.start));
+    const classDays = [1, 2, 3, 4, 5, 6, 0].map((d) => [d, classes.filter((c) => c.day === d)]).filter(([, list]) => list.length);
+    const theme = themeSetting();
+    const COMMUTE_STEPS = [15, 30, 45, 60, 75, 90, 120, 150, 180];
+    const commuteOpts = COMMUTE_STEPS.includes(b.commuteMins) ? COMMUTE_STEPS : COMMUTE_STEPS.concat(b.commuteMins).sort((x, y) => x - y);
     const upcomingEvents = state.events.filter((e) => e.end > now()).sort((a, c) => a.start - c.start);
     return `
-      <header class="home-head">${themeToggle()}<div class="eyebrow">Profile & settings</div><h1>${esc(state.user.name || 'You')}</h1></header>
-      <section class="card settings">
-        <h2>Your day</h2>
-        <div class="grid2">
-          <label>Day starts<select data-setting="dayStart">${timeOpts(b.dayStart, 240, 600)}</select></label>
-          <label>Latest scheduling<select data-setting="dayEnd">${timeOpts(b.dayEnd, 1140, 1410)}</select></label>
-          <label>Commute (FTF days)<select data-setting="commuteMins" data-type="int">${[0, 15, 30, 45, 60, 75, 90, 120].map((m) => `<option value="${m}" ${m === b.commuteMins ? 'selected' : ''}>${m ? T.dur(m) : 'None'}</option>`).join('')}</select></label>
-          <label>Morning routine<select data-setting="routineMins" data-type="int">${[0, 15, 30, 45, 60].map((m) => `<option value="${m}" ${m === b.routineMins ? 'selected' : ''}>${m ? T.dur(m) : 'None'}</option>`).join('')}</select></label>
-        </div>
-        <label class="toggle"><input type="checkbox" data-setting="protectLunch" ${b.protectLunch ? 'checked' : ''}> Protect a lunch hour (12–1 PM) when free</label>
-        <p class="small muted">SIKAD keeps a ${b.bufferMins}-minute transition buffer around every task. Changes here recalculate your plan, and you can undo them.</p>
-      </section>
-
-      <section class="card settings">
+      <header class="home-head"><h1>${esc(state.user.name || 'You')}</h1><p class="head-sub">Profile and settings</p></header>
+      <div class="cols profile">
+      <div class="col-a">
+      <section class="card settings p-classes">
         <div class="list-head"><h2>Class schedule</h2><span class="fixed-tag">${ICON.lock}Fixed</span></div>
-        <ul class="plain fixed-list">${classes.map((c) => `<li><span class="num">${ICON.lock}<b>${esc(c.title)}</b> · ${T.DAY_SHORT[c.day]} ${T.hmLabel(c.start)}–${T.hmLabel(c.end)} · ${c.mode === 'FTF' ? 'Face-to-face' : 'Online'}</span><button class="icon-btn" aria-label="Remove ${esc(c.title)} on ${T.DAY_NAMES[c.day]}" data-action="removeClass" data-id="${c.id}">${ICON.close}</button></li>`).join('') || '<li class="muted">No classes.</li>'}</ul>
+        ${classDays.map(([d, list]) => {
+          const mins = list.reduce((a, c) => a + T.hmToMins(c.end) - T.hmToMins(c.start), 0);
+          return `<div class="day-group">
+            <div class="dg-head"><h3>${T.DAY_NAMES[d]}</h3><span class="small muted num">${list.length} class${list.length === 1 ? '' : 'es'} · ${T.dur(mins)}</span></div>
+            <ul class="plain fixed-list">${list.map((c) => `<li><span class="num">${ICON.lock}<b>${esc(c.title)}</b> · ${T.hmLabel(c.start)}–${T.hmLabel(c.end)} · ${c.mode === 'FTF' ? 'Face-to-face' : 'Online'}</span><button class="btn small ghost" aria-label="Remove ${esc(c.title)} on ${T.DAY_NAMES[c.day]}" data-action="removeClass" data-id="${c.id}">Remove</button></li>`).join('')}</ul>
+          </div>`;
+        }).join('') || '<p class="muted">No classes.</p>'}
         <details class="add"><summary>${ICON.plus}Add a class</summary>
           <div class="grid2 add-form" id="add-class">
-            <label>Subject<input name="title" placeholder="e.g. IT 302"></label>
+            <label>Subject<input name="title" placeholder="e.g. IT 203"></label>
             <label>Day<select name="day">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<option value="${d}">${T.DAY_NAMES[d]}</option>`).join('')}</select></label>
             <label>Start<input type="time" name="start" value="08:00"></label>
             <label>End<input type="time" name="end" value="10:00"></label>
@@ -1182,10 +1410,35 @@
           </div>
         </details>
       </section>
+      <section class="card settings limits" aria-labelledby="limits-title">
+        <h2 id="limits-title">How SIKAD plans & its limits</h2>
+        <ul class="limits-list">
+          <li>SIKAD plans your time. It doesn't do your schoolwork or write graded work for you.</li>
+          <li>It isn't a counselor or a health tool, and it doesn't judge your stress. If things feel like too much, talk to someone you trust or your school's guidance office.</li>
+          <li>Times marked <span class="est-dur">≈</span> are guesses. Change them anytime.</li>
+          <li>A plan isn't a promise. SIKAD can't guarantee grades or that everything fits. It shows you when it doesn't.</li>
+          <li>Your classes and fixed commitments never move unless you change them. You decide.</li>
+          <li>In this prototype, reading photos/PDFs, voice input, and calendar or class-platform connections use sample data. Planning, rescheduling and Undo work on what you type.</li>
+          <li>Your data stays on this device.</li>
+        </ul>
+      </section>
+      </div>
+      <div class="col-b">
+      <section class="card settings p-day">
+        <h2>Your day</h2>
+        <div class="grid2">
+          <label>Day starts<select data-setting="dayStart">${timeOpts(b.dayStart, 240, 600)}</select></label>
+          <label>Stop scheduling after<select data-setting="dayEnd">${timeOpts(b.dayEnd, 1140, 1410)}</select></label>
+          <label>Commute (FTF days)<select data-setting="commuteMins" data-type="int">${commuteOpts.map((m) => `<option value="${m}" ${m === b.commuteMins ? 'selected' : ''}>${COMMUTE_STEPS.includes(m) ? T.dur(m) : `Custom (${m ? T.dur(m) : 'none'})`}</option>`).join('')}</select></label>
+          <label>Morning routine<select data-setting="routineMins" data-type="int">${[0, 15, 30, 45, 60].map((m) => `<option value="${m}" ${m === b.routineMins ? 'selected' : ''}>${m ? T.dur(m) : 'None'}</option>`).join('')}</select></label>
+        </div>
+        <label class="toggle"><input type="checkbox" data-setting="protectLunch" ${b.protectLunch ? 'checked' : ''}> Protect a lunch hour (12–1 PM) when free</label>
+        <p class="small muted">SIKAD keeps a ${b.bufferMins}-minute transition buffer around every task. Changes here recalculate your plan, and you can undo them.</p>
+      </section>
 
       <section class="card settings">
         <div class="list-head"><h2>Recurring commitments</h2><span class="fixed-tag">${ICON.lock}Fixed</span></div>
-        <ul class="plain fixed-list">${b.recurring.map((r) => `<li><span class="num">${ICON.lock}<b>${esc(r.title)}</b> · Weekly · ${T.DAY_NAMES[r.day]} ${T.hmLabel(r.start)}–${T.hmLabel(r.end)}</span><button class="icon-btn" aria-label="Remove ${esc(r.title)}" data-action="removeRecurring" data-id="${r.id}">${ICON.close}</button></li>`).join('') || '<li class="muted">None yet.</li>'}</ul>
+        <ul class="plain fixed-list">${b.recurring.map((r) => `<li><span class="num">${ICON.lock}<b>${esc(r.title)}</b> · Weekly · ${T.DAY_NAMES[r.day]} ${T.hmLabel(r.start)}–${T.hmLabel(r.end)}</span><button class="btn small ghost" aria-label="Remove ${esc(r.title)}" data-action="removeRecurring" data-id="${r.id}">Remove</button></li>`).join('') || '<li class="muted">None yet.</li>'}</ul>
         <details class="add"><summary>${ICON.plus}Add a weekly commitment</summary>
           <div class="grid2 add-form" id="add-rec">
             <label>Name<input name="title" placeholder="e.g. Org meeting"></label>
@@ -1196,28 +1449,31 @@
             <button class="btn small" data-action="addRecurringForm">Add</button>
           </div>
         </details>
-        ${upcomingEvents.length ? `<h3>One-time commitments</h3><ul class="plain fixed-list">${upcomingEvents.map((e) => `<li><span class="num">${ICON.lock}<b>${esc(e.title)}</b> · One-time · ${T.short(e.start)} ${T.range(e.start, e.end)}</span><button class="icon-btn" aria-label="Remove ${esc(e.title)}" data-action="removeEvent" data-id="${e.id}">${ICON.close}</button></li>`).join('')}</ul>` : ''}
+        ${upcomingEvents.length ? `<h3>One-time commitments</h3><ul class="plain fixed-list">${upcomingEvents.map((e) => `<li><span class="num">${ICON.lock}<b>${esc(e.title)}</b> · One-time · ${T.short(e.start)} ${T.range(e.start, e.end)}</span><button class="btn small ghost" aria-label="Remove ${esc(e.title)}" data-action="removeEvent" data-id="${e.id}">Remove</button></li>`).join('')}</ul>` : ''}
         ${state.cancellations.length ? `<h3>Cancelled sessions</h3><ul class="plain">${state.cancellations.map((c) => `<li><span>${esc(cancellationLabel(c))}</span><button class="btn small" data-action="restoreOcc" data-id="${esc(c)}" aria-label="Restore ${esc(cancellationLabel(c))}">Restore</button></li>`).join('')}</ul>` : ''}
+      </section>
+
+      <section class="card settings">
+        <h2 id="appearance-title">Appearance</h2>
+        <div class="seg" role="radiogroup" aria-labelledby="appearance-title">
+          ${[['light', 'Light'], ['dark', 'Dark'], ['system', 'System']].map(([v, label]) => `<button role="radio" aria-checked="${theme === v}" class="${theme === v ? 'on' : ''}" data-action="setTheme" data-v="${v}">${label}</button>`).join('')}
+        </div>
       </section>
 
       <section class="card settings">
         <h2>Connected platforms</h2>
         <div class="integrations">${D.INTEGRATIONS.map(integrationRow).join('')}</div>
-        <p class="demo-note"><span class="demo-tag">DEMO</span> Connections are simulated in this build.</p>
+        ${sampleNote('Prototype: connections use sample data.')}
       </section>
 
-      <section class="card settings demo-section">
-        <div class="list-head"><h2>Under the hood</h2><span class="demo-tag">DEMO</span></div>
-        <p class="small">Every extraction and replan produces the JSON contract from prompt.md (Phase 1–3).</p>
-        <button class="btn block" data-action="openEngine">View engine output (JSON)</button>
-        <button class="btn block" data-action="loadDemoConfirm">Reset demo to the initial scenario</button>
-      </section>
-
-      <section class="card settings">
+      <section class="card settings p-reset">
         <h2>Reset</h2>
         <p class="small">Erases everything on this device and restarts setup.</p>
         <button class="btn small danger" data-action="resetAll">Reset & restart setup</button>
-      </section>`;
+      </section>
+      </div>
+      </div>
+      ${versionText()}`;
   }
   function cancellationLabel(id) {
     const [ref, date] = id.split('@');
@@ -1229,7 +1485,7 @@
   // ================================================================ SHEETS ==
   function sheet() {
     const sh = ui.sheet;
-    const inner = { dump: dumpSheet, proposal: proposalSheet, task: taskSheet, fixed: fixedSheet, clock: clockSheet, engine: engineSheet }[sh.type]();
+    const inner = { dump: dumpSheet, proposal: proposalSheet, task: taskSheet, fixed: fixedSheet, clock: clockSheet, engine: engineSheet, import: importSheet }[sh.type]();
     return `<div class="sheet-backdrop" data-action="backdrop"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
       <div class="sheet-grip" aria-hidden="true"></div><button class="icon-btn sheet-close" data-action="closeSheet" aria-label="Close">${ICON.close}</button>${inner}</div></div>`;
   }
@@ -1270,18 +1526,14 @@
         <button class="btn primary block" data-action="processDump">Send</button>
         <div class="ask-examples"><p class="small" id="ask-ex">Try asking</p>
           <div class="chips" aria-labelledby="ask-ex">${D.QUESTIONS.map((q, i) => `<button class="chip-btn" data-action="askExample" data-i="${i}">${esc(q)}</button>`).join('')}</div></div>
-        <details class="scenarios" open>
-          <summary><span class="demo-tag">DEMO</span> Demo scenarios</summary>
-          <div class="chips">${D.SCENARIOS.map((sc, i) => `<button class="chip-btn" data-action="scenario" data-i="${i}">${esc(sc.label)}</button>`).join('')}</div>
-        </details>
-        <p class="small muted">Answers are worked out from your current plan using fixed rules. No AI model is connected in this demo.</p>`}`;
+        <p class="small muted">Answers are worked out from your current plan using fixed rules. No AI model is connected in this prototype.</p>`}`;
   }
 
   function manualForm() {
     const f = ui.sheet.form || (ui.sheet.form = { title: '', deadline: null, durationMins: 60, priority: 'medium', notes: '' });
     return `
       <div class="form">
-        <label>Task name <span class="req">(required)</span><input value="${esc(f.title)}" data-bind="sheet.form.title" placeholder="e.g. ADET report" required aria-required="true"></label>
+        <label>Task name <span class="req">(required)</span><input value="${esc(f.title)}" data-bind="sheet.form.title" placeholder="e.g. IT 208 report" required aria-required="true"></label>
         <label>Deadline<input type="datetime-local" value="${f.deadline != null ? T.toInput(f.deadline) : ''}" data-bind="sheet.form.deadline" data-type="dt"></label>
         <label>Estimated duration (hours)<input type="number" min="0.25" step="0.25" value="${hrs(f.durationMins)}" data-bind="sheet.form.durationMins" data-type="hrs"></label>
         <label>Priority (optional)<select data-bind="sheet.form.priority">${['high', 'medium', 'low'].map((p) => `<option value="${p}" ${p === f.priority ? 'selected' : ''}>${PRI_LABEL[p]}</option>`).join('')}</select></label>
@@ -1626,6 +1878,7 @@
     ui.sheet = null;
     S.replan(state, `Edited ${t.title}${changes.length ? ' (' + changes.join(', ') + ')' : ''}`);
     render();
+    planToast();
   }
 
   // ---------- Fixed commitment ----------
@@ -1651,11 +1904,11 @@
       ['Mon 4:45 PM (the boss texts)', T.make(2026, 10, 12, 16, 45)], ['Tue 6:00 AM', T.make(2026, 10, 13, 6, 0)], ['Wed 10:00 AM', T.make(2026, 10, 14, 10, 0)],
     ].filter(([, ms]) => ms > now());
     return `
-      <h2 id="sheet-title" tabindex="-1"><span class="demo-tag">DEMO</span> Demo clock</h2>
+      <h2 id="sheet-title" tabindex="-1">${ICON.clock}Clock</h2>
       <p class="sheet-sub">SIKAD is stateless about time: everything is computed from this clock. Move it forward to walk through the week. Sessions that pass without "Done" become check-ins and get rescheduled.</p>
       <label>Jump to<input type="datetime-local" id="clock-input" value="${T.toInput(now())}"></label>
       <div class="row end"><button class="btn" data-action="setClock">Set time</button></div>
-      <div class="row end"><button class="btn small" data-action="loadDemoConfirm">Reset demo to the initial scenario</button></div>
+      <div class="row end"><button class="btn small" data-action="loadDemoConfirm">Reset to Alex's week</button></div>
       ${presets.length ? `<p class="small"><b>Story checkpoints</b></p><div class="chips">${presets.map(([l, ms]) => `<button class="chip-btn" data-action="jump" data-ms="${ms}">${esc(l)}</button>`).join('')}</div>` : ''}`;
   }
 
@@ -1663,7 +1916,7 @@
   function engineSheet() {
     const log = state.engineLog;
     return `
-      <h2 id="sheet-title" tabindex="-1"><span class="demo-tag">DEMO</span> Engine output</h2>
+      <h2 id="sheet-title" tabindex="-1">Engine output</h2>
       <p class="sheet-sub">The structured JSON the engine returns for each request, following the contracts in prompt.md. Newest first.</p>
       ${log.map((e, i) => `
         <details class="log" ${i === 0 ? 'open' : ''}>
@@ -1678,7 +1931,7 @@
     // --- onboarding
     obNext() {
       const ob = ui.ob;
-      if (ob.step === 0) state.user.name = (ob.name || '').trim() || 'there';
+      if (ob.step === 0) state.user.name = (ob.name || '').trim();
       if (ob.step === 1) {
         state.baseline.classes = ob.classes.filter((c) => c.title.trim()).map((c) => ({ id: S.uid(state, 'c'), title: c.title.trim(), day: c.day, start: c.start, end: c.end, mode: c.mode }));
         const p1 = { extracted_commitments: state.baseline.classes.map((c) => ({ title: c.title, day_of_week: T.DAY_NAMES[c.day], start_time: c.start, end_time: c.end, type: 'fixed', mode: c.mode === 'FTF' ? 'In person' : 'Online' })), clarification_needed: null };
@@ -1686,10 +1939,13 @@
       }
       if (ob.step === 2) {
         const ls = ob.ls;
+        const mins = Math.round(Number(ls.commuteMins));
+        if (!(mins >= 5 && mins <= 240)) { flagField(document.getElementById('commute-custom'), 'Enter your commute in minutes, from 5 to 240.'); return; }
+        ls.commuteMins = mins;
         S.applyLifestyle(state, {
-          dayStart: ls.dayStart, dayEnd: ls.dayEnd, commuteMins: Number(ls.commuteMins),
+          dayStart: ls.dayStart, dayEnd: ls.dayEnd, commuteMins: ls.commuteMins,
           work: ls.working === 'yes' ? ls.workDays.map((d) => ({ day: d, start: ls.workStart, end: ls.workEnd })) : [],
-          org: ls.org === 'yes' ? [{ day: ls.orgDay, start: ls.orgStart, end: ls.orgEnd }] : [],
+          org: ls.org === 'yes' ? (ls.orgs || []).map((o) => ({ day: o.day, start: o.start, end: o.end, name: (o.name || '').trim() })) : [],
         });
       }
       ob.step++;
@@ -1702,9 +1958,18 @@
     obSet(ds) {
       const v = ds.value;
       const [obj, key] = ds.path.split('.');
-      ui.ob[obj][key] = /^\d+$/.test(v) && key === 'commuteMins' ? Number(v) : v;
+      if (key === 'commuteMins') {                            // "Custom" keeps the current minutes and reveals the input
+        ui.ob.ls.commuteCustom = v === 'custom';
+        if (v !== 'custom') ui.ob.ls.commuteMins = Number(v);
+        render();
+        if (v === 'custom') { const el = document.getElementById('commute-custom'); if (el) el.focus(); }
+        return;
+      }
+      ui.ob[obj][key] = v;
       render();
     },
+    obAddOrg() { ui.ob.ls.orgs.push(newOrg()); render(); const rows = document.querySelectorAll('.org-row input:not([type])'); if (rows.length) rows[rows.length - 1].focus(); },
+    obRemoveOrg(ds) { ui.ob.ls.orgs.splice(Number(ds.i), 1); render(); },
     obToggleDay(ds) {
       const arr = ui.ob.ls[ds.path];
       const d = Number(ds.day);
@@ -1712,17 +1977,25 @@
       if (i >= 0) arr.splice(i, 1); else arr.push(d);
       render();
     },
-    obSampleCor() { ui.ob.corText = D.SAMPLE_COR_TEXT; A.obExtract(); },
+    obSampleCor() { if (ui.ob.extracting) return; ui.ob.corText = D.SAMPLE_COR_TEXT; ui.ob.uploadNote = ''; A.obExtract(); },
+    // Shows "Reading…" while it runs. A second tap during that time does nothing.
     obExtract() {
       const ob = ui.ob;
-      const p1 = P.parseSchedule(ob.corText);
-      S.log(state, 'Phase 1 · Schedule extraction', ob.corText.slice(0, 200), p1);
-      if (p1.clarification_needed) { ob.analysis = p1.clarification_needed; ob.analysisError = true; ob.extracted = true; render(); return; }
-      ob.analysisError = false;
-      ob.classes = p1.extracted_commitments.map((c) => ({ title: c.title, day: T.DAY_NAMES.indexOf(c.day_of_week), start: c.start_time, end: c.end_time, mode: c.mode === 'Online' ? 'Online' : 'FTF' }));
-      ob.analysis = E.analyzeBaseline(ob.classes);
-      ob.extracted = true;
+      if (ob.extracting) return;
+      ob.extracting = true;
       render();
+      setTimeout(() => {
+        if (ui.ob !== ob) return;                              // setup was reset meanwhile
+        ob.extracting = false;
+        const p1 = P.parseSchedule(ob.corText);
+        S.log(state, 'Phase 1 · Schedule extraction', ob.corText.slice(0, 200), p1);
+        if (p1.clarification_needed) { ob.analysis = p1.clarification_needed; ob.analysisError = true; ob.extracted = true; render(); return; }
+        ob.analysisError = false;
+        ob.classes = p1.extracted_commitments.map((c) => ({ title: c.title, day: T.DAY_NAMES.indexOf(c.day_of_week), start: c.start_time, end: c.end_time, mode: c.mode === 'Online' ? 'Online' : 'FTF' }));
+        ob.analysis = E.analyzeBaseline(ob.classes);
+        ob.extracted = true;
+        render();
+      }, 450);
     },
     obAddClass() { ui.ob.classes.push({ title: '', day: 1, start: '08:00', end: '10:00', mode: 'FTF' }); ui.ob.extracted = true; render(); },
     obRemoveClass(ds) { ui.ob.classes.splice(Number(ds.i), 1); ui.ob.analysis = E.analyzeBaseline(ui.ob.classes); render(); },
@@ -1749,7 +2022,7 @@
           ui.ob = freshOnboarding();
           ui.tab = 'home';
           render();
-          toast('Your plan is ready. Use the demo clock at the top to move through the week.', { ms: 6000 });
+          toast('Your plan is ready.');
           return;
         }
         render();
@@ -1760,36 +2033,99 @@
     loadDemo() {
       state = S.loadDemo(S.reset());
       ui.ob = freshOnboarding(); ui.tab = 'home'; undoSnap = null;
-      ui.sheet = null; ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.focusPick = null; ui.focusPartial = false; ui.prevPct = null; ui.error = null;
+      ui.sheet = null; ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.focusPick = null; ui.focusPartial = false; ui.prevPct = null; ui.error = null; ui.dock = false;
       render();
-      toast("Loaded Alex's week. Try Ask SIKAD, or move the demo clock.", { ms: 6000 });
+      toast("Loaded Alex's week. Try Ask SIKAD, or move the clock in Judge tools.", { ms: 6000 });
     },
-    loadDemoConfirm() { if (confirm('Reset the demo? This replaces all saved data with the initial Alex scenario.')) A.loadDemo(); },
+    loadDemoConfirm() { if (confirm("Reset to Alex's week? This replaces all saved data with the sample scenario.")) A.loadDemo(); },
+    dockToggle() { ui.dock = !ui.dock; render(); },
+    versionTap() {
+      clearTimeout(versionTimer);
+      versionTimer = setTimeout(() => { versionTaps = 0; }, 1500);
+      if (++versionTaps < 5) return;
+      versionTaps = 0; judge = !judge; ui.dock = judge;
+      try { if (judge) sessionStorage.setItem(JUDGE_KEY, '1'); else sessionStorage.removeItem(JUDGE_KEY); } catch (e) { /* storage unavailable: lasts until reload */ }
+      render();
+      toast(judge ? 'Judge tools are on.' : 'Judge tools are off.');
+    },
     resetAll() {
       if (!confirm('Erase all data and restart setup?')) return;
       state = S.reset(); ui.ob = freshOnboarding(); ui.sheet = null; undoSnap = null;
       ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.focusPick = null; ui.prevPct = null; ui.error = null; render();
     },
-    toggleIntegration(ds) { state.integrations[ds.id] = !state.integrations[ds.id]; render(); },
+    toggleIntegration(ds) {
+      const id = ds.id, info = D.INTEGRATIONS.find((i) => i.id === id);
+      if (!info) return;
+      if (state.integrations[id]) {                           // Disconnect. Tasks already added stay in the plan.
+        state.integrations[id] = false; delete ui.integrationState[id];
+        render();
+        toast(`Disconnected ${info.name}.`);
+        return;
+      }
+      const attempt = ui.integrationState[id] = { status: 'connecting' };
+      render();
+      const stale = () => ui.integrationState[id] !== attempt;   // cancelled, or a newer attempt started
+      Promise.resolve().then(() => Adapters[id].connect()).then((res) => {
+        if (stale()) return;
+        const items = (res && res.items) || [];
+        state.integrations[id] = true;
+        ui.integrationState[id] = { status: 'connected', account: (res && res.account) || 'Connected', lastSync: Date.now(), imported: items.length };
+        if (!ui.sheet && items.length) ui.sheet = { type: 'import', id, name: info.name, items: items.map((x) => ({ include: true, title: x.title, due: x.due, course: x.course || null, mins: x.mins || null, source: x.source || id })) };
+        render();
+      }).catch((err) => {
+        if (stale()) return;
+        ui.integrationState[id] = { status: 'error', error: (err && err.message) || `Couldn't reach ${info.name}. Check your connection.` };
+        render();
+      });
+    },
+    cancelIntegration(ds) { delete ui.integrationState[ds.id]; render(); },
+    // Imported items become ordinary tasks through the same path as "Add a task manually".
+    importAdd() {
+      const sh = ui.sheet;
+      const picked = sh.items.filter((it) => it.include && it.title.trim());
+      if (!picked.length) return;
+      if (state.onboarded) snapshot('Import');
+      for (const it of picked) {
+        const { type, est } = P.classify(it.title);
+        const mins = it.mins || est;                             // the platform's own time when it gives one, else an estimate
+        const task = S.makeTask(state, { title: it.title.trim(), type, context: it.course, deadline: it.due, durationMins: mins, isAiEstimate: !it.mins, priority: 'medium', parts: P.suggestParts(type, mins) });
+        task.source = it.source;
+        state.tasks.push(task);
+      }
+      const n = picked.length, what = `${n} task${n === 1 ? '' : 's'}`;
+      ui.sheet = null;
+      if (!state.onboarded) { render(); toast(`${what} added. They get scheduled with your first plan.`); return; }
+      S.replan(state, `Imported ${what} from ${sh.name}`);
+      render();
+      toast(`Added ${what} from ${sh.name}.`, { undo: true });
+    },
 
     // --- navigation
     tab(ds) { ui.tab = ds.tab; ui.focusOnly = false; render(); window.scrollTo(0, 0); },
     dayView(ds) { ui.dayView = ds.v; render(); },
     pickDay(ds) { ui.weekDay = Number(ds.day); render(); },
+    // data-v: -1 previous week, 1 next week, 0 back to this week. The arrows keep the same weekday selected.
+    weekNav(ds) {
+      const w = weekState(), dir = Number(ds.v);
+      const to = dir === 0 ? w.cur : Math.min(w.max, Math.max(w.min, w.start + dir * 7 * T.DAY));
+      if (to === w.start) return;
+      ui.weekStart = to === w.cur ? null : to;
+      ui.weekDay = dir === 0 ? null : w.sel + (to - w.start);
+      render();
+      const body = document.querySelector('.week-body');
+      if (body && !M.reduced()) body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
+    },
     showFullPlan() { ui.focusOnly = false; render(); },
     focusOnly() { ui.sheet = null; ui.tab = 'home'; ui.focusOnly = true; render(); window.scrollTo(0, 0); },
     dismissUpdate() { state.lastUpdate = null; render(); },
     skipToMain() { const m = document.getElementById('main'); if (m) m.focus(); },
+    // One tap flips whatever is showing now (also from "System") and stores it as an explicit choice.
     toggleTheme() {
-      const html = document.documentElement;
-      html.classList.add('theme-fade');                       // colours cross-fade once (motion-spec §5.4)
-      clearTimeout(themeFade);
-      themeFade = setTimeout(() => html.classList.remove('theme-fade'), M.DUR.enter + 40);
-      applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
-      render();
+      switchTheme(currentTheme() === 'dark' ? 'light' : 'dark');
       const btn = document.querySelector('.theme-toggle');
       if (btn) btn.focus({ preventScroll: true });
     },
+    setTheme(ds) { switchTheme(ds.v); },
     dismissError() { ui.error = null; render(); },
     retryError() { const sh = ui.error && ui.error.retrySheet; ui.error = null; ui.sheet = sh; render(); },
     undo() {
@@ -1804,25 +2140,44 @@
     },
 
     // --- focus card
+    // Start begins the session straight away with the suggested working method. "Change" swaps it later.
     start(ds) {
-      ui.focusPick = ds.id; ui.focusMethod = null; ui.spotlightOff = false;
+      const s = S.findSession(state, ds.id);
+      if (!s) return;
+      const rec = F.recommend(focusContext(s, taskById(s.taskId)));
+      snapshot('Start session');
+      S.startSession(state, ds.id, rec.setup);
+      ui.focusWhy = { id: ds.id, method: rec.method, text: rec.reason };
+      ui.focusPick = null; ui.focusMethod = null; ui.focusPartial = false; ui.spotlightOff = false;
       render();
-      const h = document.getElementById('method-title');
-      if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); }
+      const h = document.getElementById('focus-title');
+      if (h) h.focus({ preventScroll: true });
       // The spotlit card should be fully in view: bring its top up if the expanded card runs off screen.
       const card = document.querySelector('.focus');
       if (card) { const r = card.getBoundingClientRect(); if (r.top < 64 || r.bottom > window.innerHeight - 96) card.scrollIntoView({ block: 'start' }); }
     },
     focusMethod(ds) { ui.focusMethod = ds.v; render(); },
     focusCancel() { ui.focusPick = null; ui.focusMethod = null; render(); },
+    focusChange() {
+      if (!state.active) return;
+      ui.focusPick = state.active.sessionId; ui.focusMethod = null;
+      render();
+      const h = document.getElementById('method-title');
+      if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); }
+    },
+    // Confirms the picker. The session keeps running and its focused time is kept; only the method changes.
     focusBegin(ds) {
       const s = S.findSession(state, ds.id);
-      if (!s) return;
+      const a = state.active;
+      if (!s || !a || a.sessionId !== ds.id) return;
       const rec = F.recommend(focusContext(s, taskById(s.taskId)));
-      const opt = rec.options.find((o) => o.method === (ui.focusMethod || rec.method));
-      snapshot('Start session');
-      S.startSession(state, ds.id, opt.setup);
-      ui.focusPick = null; ui.focusMethod = null; ui.focusPartial = false; ui.spotlightOff = false;
+      const opt = rec.options.find((o) => o.method === (ui.focusMethod || a.method));
+      if (opt && opt.method !== a.method) {
+        Object.assign(a, opt.setup);
+        state.prefs.focusMethod = opt.method;
+        lastPhase = null;
+      }
+      ui.focusPick = null; ui.focusMethod = null;
       render();
     },
     // Leaving the spotlight only un-dims the screen. The session and its timer are untouched.
@@ -1887,10 +2242,11 @@
       t.deadline = v;
       S.replan(state, `Deadline set: ${t.title} → ${T.short(v)}`);
       render();
+      planToast();
     },
 
     // --- clock
-    openClock() { ui.sheet = { type: 'clock' }; render(); },
+    openClock() { ui.dock = false; ui.sheet = { type: 'clock' }; render(); },
     advance(ds) { moveClock(now() + Number(ds.mins) * T.MIN); },
     nextMorning() { moveClock(T.at(T.dayStart(now()) + T.DAY, state.baseline.dayStart)); },
     jump(ds) { ui.sheet = null; moveClock(Number(ds.ms)); },
@@ -1904,7 +2260,7 @@
     // --- brain dump
     openDump() { ui.sheet = { type: 'dump', mode: 'input', text: ui.dumpDraft || '', input: 'text', restored: !!ui.dumpDraft }; render(); setTimeout(() => { const el = document.getElementById('dump-text'); if (el) el.focus(); }, 60); },
     dumpInput(ds) { ui.sheet.input = ds.v; render(); },
-    scenario(ds) { ui.sheet.text = D.SCENARIOS[Number(ds.i)].text; render(); },
+    scenario(ds) { ui.dock = false; ui.sheet = { type: 'dump', mode: 'input', input: 'text', text: D.SCENARIOS[Number(ds.i)].text }; render(); },
     processDump() {
       const text = (ui.sheet.text || '').trim();
       if (!text) { flagField(document.getElementById('dump-text'), 'Nothing to send yet. Ask a question or say what changed, e.g. "I have to work tonight 6 to 10".'); return; }
@@ -1934,6 +2290,7 @@
       ui.sheet = null; ui.tab = 'home'; ui.focusOnly = false;
       render();
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      planToast();
     },
     rejectProposal() { ui.sheet = null; ui.dumpDraft = null; render(); toast('No changes were made. Your plan is as it was.'); },
     editProposal() { ui.sheet = ui.sheet.review; render(); },
@@ -1953,7 +2310,7 @@
     applyDump() { applyDump(); },
     saveManual() {
       const f = ui.sheet.form;
-      if (!f.title.trim()) { flagField(document.querySelector('[data-bind="sheet.form.title"]'), 'Task name is missing. Type a short name, e.g. "ADET report".'); return; }
+      if (!f.title.trim()) { flagField(document.querySelector('[data-bind="sheet.form.title"]'), 'Task name is missing. Type a short name, e.g. "IT 208 report".'); return; }
       snapshot('Manual task');
       const { type, est } = P.classify(f.title);
       const task = S.makeTask(state, { title: P.titleCase(f.title.trim()), type, deadline: f.deadline, durationMins: f.durationMins || est,
@@ -1962,6 +2319,7 @@
       ui.sheet = null;
       S.replan(state, `New task: ${task.title}`, { notes: task.deadline == null ? [`"${task.title}" needs a deadline before it can be scheduled.`] : [] });
       render();
+      planToast();
     },
     dictStart(ds) { dictStart(ds.path); },
     dictStop() { if (recog) { try { recog.stop(); } catch (e) { finishDictation(); } } },
@@ -1985,6 +2343,7 @@
       S.replan(state, `Completed: ${t.title}`);
       ui.celebrate = true;
       render();
+      planToast();
     },
     deleteTask() {
       const t = taskById(ui.sheet.id);
@@ -1993,6 +2352,7 @@
       ui.sheet = null;
       S.replan(state, `Removed task: ${t.title}`);
       render();
+      planToast();
     },
 
     // --- fixed commitments & settings
@@ -2006,14 +2366,19 @@
       ui.sheet = null;
       S.replan(state, `Cancelled ${o.title} (${T.short(o.start)}) — by you`, { notes: [`That frees up ${T.dur((o.end - o.start) / T.MIN)} on ${T.short(o.start)}.`] });
       render();
+      planToast();
     },
-    removeClass(ds) { baselineChange('Removed class', () => { state.baseline.classes = state.baseline.classes.filter((c) => c.id !== ds.id); }); },
+    removeClass(ds) {
+      const c = state.baseline.classes.find((x) => x.id === ds.id);
+      if (!c) return;
+      baselineChange(`Removed class ${c.title}`, () => { state.baseline.classes = state.baseline.classes.filter((x) => x.id !== ds.id); }, `Removed ${c.title}`);
+    },
     removeRecurring(ds) { baselineChange('Removed weekly commitment', () => { state.baseline.recurring = state.baseline.recurring.filter((r) => r.id !== ds.id); }); },
     removeEvent(ds) { baselineChange('Removed one-time commitment', () => { state.events = state.events.filter((e) => e.id !== ds.id); }); },
     restoreOcc(ds) { baselineChange('Restored a cancelled session', () => { state.cancellations = state.cancellations.filter((c) => c !== ds.id); }); },
     addClass() {
       const f = formValues('add-class');
-      if (!f.title.trim()) { flagField(document.querySelector('#add-class [name="title"]'), 'Subject is missing. Type the class name or code, e.g. "IT 302".'); return; }
+      if (!f.title.trim()) { flagField(document.querySelector('#add-class [name="title"]'), 'Subject is missing. Type the class name or code, e.g. "IT 203".'); return; }
       if (f.end <= f.start) { flagField(document.querySelector('#add-class [name="end"]'), 'End time must be later than the start time.'); return; }
       baselineChange(`Added class ${f.title}`, () => state.baseline.classes.push({ id: S.uid(state, 'c'), title: f.title.trim(), day: Number(f.day), start: f.start, end: f.end, mode: f.mode }));
     },
@@ -2023,7 +2388,7 @@
       if (f.end <= f.start) { flagField(document.querySelector('#add-rec [name="end"]'), 'End time must be later than the start time.'); return; }
       baselineChange(`Added weekly ${f.title}`, () => S.addRecurring(state, { title: f.title.trim(), kind: f.kind, days: [Number(f.day)], start: f.start, end: f.end }));
     },
-    openEngine() { ui.sheet = { type: 'engine' }; render(); },
+    openEngine() { ui.dock = false; ui.sheet = { type: 'engine' }; render(); },
 
     // --- sheet chrome
     closeSheet() { stopVoice(); keepDraft(); ui.sheet = null; render(); },
@@ -2060,13 +2425,15 @@
     return out;
   }
 
-  function baselineChange(trigger, fn) {
+  function baselineChange(trigger, fn, msg) {
     snapshot(trigger);
     fn();
     S.replan(state, trigger);
     render();
-    toast('Baseline updated — plan recalculated.', { undo: true });
+    toast(msg || 'Baseline updated. Plan recalculated.', { undo: true });
   }
+  /** Every replan offers Undo in one place: the toast. */
+  const planToast = () => toast('Plan updated.', { undo: true });
 
   function moveClock(ms) {
     const hadCheckins = state.checkins.length;
@@ -2179,8 +2546,8 @@
       baselineChange('Baseline settings changed', () => { state.baseline[key] = val; });
       return;
     }
-    if (el.dataset.change === 'obUpload' && el.files && el.files[0]) {
-      ui.ob.uploadNote = `Read "${el.files[0].name}". Demo build: document OCR is simulated, so the sample COR text was used. Review it below.`;
+    if (el.dataset.change === 'obUpload' && el.files && el.files[0] && !ui.ob.extracting) {
+      ui.ob.uploadNote = 'Prototype: reading files uses a sample schedule. Edit anything.';
       ui.ob.corText = D.SAMPLE_COR_TEXT;
       A.obExtract();
     }
@@ -2201,6 +2568,13 @@
     else if (e.key === 'Escape' && document.body.classList.contains('spotlight')) A.spotlightOff();
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ui.sheet && ui.sheet.type === 'dump' && ui.sheet.mode === 'input') A.processDump();
   });
+
+  // Offline: say so once, in one place. The plan is computed on this device, so it keeps working.
+  const setOffline = (off) => { if (ui.offline !== off) { ui.offline = off; render(); } };
+  window.addEventListener('offline', () => setOffline(true));
+  window.addEventListener('online', () => setOffline(false));
+  // App shell cache for offline launches (network first, so a new deploy is never masked by the cache).
+  try { if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (e) { /* not available: the app still runs online */ }
 
   // Keep the toggle's icon in sync when following the OS setting and it changes.
   if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (!document.documentElement.dataset.theme) render(); });
