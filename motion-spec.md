@@ -118,10 +118,25 @@ Completing from the task sheet or a check-in card has no title to strike on scre
 |---|---|---|---|---|
 | Active nav item (< 768 px) | Tap a destination | Label track opens `0fr → 1fr` + 6 px gap, 360 ms `--ease-out`; label fades in 200 ms; tint and colour 200 ms; icon settles to `scale(1.06)` with `--ease-spring`. The previous item collapses on the same clock. Only the fixed pill lays out; the page never moves. | — | Render rebuilds the nav in its previous state with transitions off, then releases it. A second tap mid-transition starts again from the last committed tab. Tapping the current tab only scrolls to top. |
 | Ask menu open | Tap Ask SIKAD | Scrim fades 200 ms. Panel scales `.94 → 1` and rises 8 px from the Ask button's centre (`--ask-x`), 200 ms `--ease-out`. The two options rise 6 px, staggered 40 ms. Icon swaps to ✕ with a 200 ms scale-in. | Panel `scale(.96)` + fade, scrim fade, 160 ms `--ease-in` | Leaving nodes are inert and removed on `animationend` (timeout fallback). Choosing a mode skips the exit: the sheet rise takes over. |
+| Nav while the Ask menu is open (< 768 px) | Tap Ask SIKAD | The active item's label closes on the same 360 ms track, so the five items are evenly spaced and Ask SIKAD sits in the centre of the pill. The other four icons shrink to `scale(.8)` and fade to 45 %, 200 ms. | Closing the menu plays it back: the label reopens, icons return. | The rebuilt nav starts from its previous state with transitions off, then is released (same as the active item). The items stay tappable. |
 | Ask menu, ≥ 768 px | Same | Opens in place under the rail button; same fade/scale, no dimming scrim. | Same | Same |
 | Mode switch inside the sheet | "Speak or type" / "Form" tabs | Press feedback, then content swap. Title changes ("Ask SIKAD" / "Add a task"). | — | Both drafts are kept in memory until sent, saved or erased. |
 
 Reduced motion: the pill and menu change state instantly; scrim, tint, label and ✕ still show the state.
+
+### 5.7 App-open intro
+
+Plays on every page load, including refresh and hard refresh, on a full-screen `--bg` cover that is in `index.html` so it shows before the scripts load. CSS only.
+
+| Step | Starts | Motion |
+|---|---|---|
+| Start dot lands | 0 ms | `scale(.25 → 1)` + fade, `--dur-strike`, `--ease-spring` |
+| Route draws from the start dot to the destination | 100 ms | `stroke-dashoffset 1 → 0`, `--dur-move`, `--ease-out` |
+| Butter "next move" dot lands | 420 ms | Same pop as the start dot |
+| I, K, A, D arrive | 480 ms, 50 ms apart | 8 px slide from the left + fade, `--dur-enter`, `--ease-out` |
+| Cover leaves | 1250 ms | Fade, `--dur-exit`, `--ease-in`; the node is then removed |
+
+Interrupt: a tap on the cover fades it out at once. If scripts fail, the cover still hides itself (`visibility: hidden` at the end of the fade). Reduced motion: the cover is not shown at all.
 
 ### 5.4 Other interactions
 

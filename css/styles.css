@@ -266,6 +266,28 @@ label > input, label > select, label > textarea, label > .hrs-input { margin-top
 .logo .logo-step { fill: var(--forest); stroke: none; }
 .logo .logo-next { fill: var(--butter); stroke: var(--forest); stroke-width: 1.6; }
 .brand { font-size: 36px; line-height: 40px; font-weight: 800; letter-spacing: -.03em; margin-top: 16px; }
+/* Full logo (route mark + IKAD). Geometry from icons/sikad-whole.svg; colours from the tokens so it follows the theme. */
+.lockup { display: block; width: 164px; height: auto; aspect-ratio: 552 / 242; stroke: none; overflow: visible; }
+.lockup .lk-route { fill: none; stroke: var(--forest); stroke-width: 14.6; }
+.lockup .lk-start, .lockup .lk-letter { fill: var(--forest); stroke: none; }
+.lockup .lk-next { fill: var(--butter); stroke: var(--forest); stroke-width: 11.7; }
+.lockup .lk-start, .lockup .lk-next { transform-box: fill-box; transform-origin: center; }
+.brand .lockup { margin-left: -3px; }   /* optical: the start dot's round edge sits on the text margin */
+
+/* App-open intro (motion-spec §5.7): start dot lands, the route draws, the Butter "next move" dot lands, IKAD arrives. */
+#intro { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: var(--bg); animation: introOut var(--dur-exit) var(--ease-in) 1250ms forwards; }
+#intro .lockup { width: min(60vw, 260px); }
+#intro .lk-start { animation: introPop var(--dur-strike) var(--ease-spring) backwards; }
+#intro .lk-route { stroke-dasharray: 1; animation: introDraw var(--dur-move) var(--ease-out) 100ms backwards; }
+#intro .lk-next { animation: introPop var(--dur-strike) var(--ease-spring) 420ms backwards; }
+#intro .lk-letter { animation: introLetter var(--dur-enter) var(--ease-out) calc(480ms + var(--i) * 50ms) backwards; }
+#intro.is-skipped { animation: introSkip var(--dur-exit) var(--ease-in) forwards; }
+@keyframes introPop { from { transform: scale(.25); opacity: 0; } }
+@keyframes introDraw { from { stroke-dashoffset: 1; } }
+@keyframes introLetter { from { opacity: 0; transform: translateX(-8px); } }
+@keyframes introOut { to { opacity: 0; visibility: hidden; } }
+@keyframes introSkip { to { opacity: 0; visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { #intro { display: none; } }
 .tagline { font-family: var(--font-display); font-size: 20px; line-height: 26px; font-weight: 700; color: var(--ink-2); margin: 8px 0 0; }
 .lead { font-size: 15px; line-height: 22px; color: var(--ink-2); max-width: 34ch; margin-top: 8px; }
 .demo-link {
@@ -652,6 +674,7 @@ button.tl-card:hover { border-color: var(--line-strong); }
   margin-top: -24px; box-shadow: var(--shadow-2); display: grid; place-items: center;
 }
 .fab-circle svg { width: 26px; height: 26px; }
+.mark-icon .mark-next { fill: var(--butter); }
 .fab:hover .fab-circle { background: var(--forest-hover); }
 :root[data-theme="dark"] .fab-circle, :root[data-theme="dark"] .fab:hover .fab-circle { color: var(--on-butter); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .fab-circle { color: var(--on-butter); } }
@@ -685,6 +708,13 @@ button.tl-card:hover { border-color: var(--line-strong); }
   .fab-circle { width: 48px; height: 48px; margin-top: 0; border: 0; box-shadow: none; }
   .fab-circle svg { width: 24px; height: 24px; }
   .fab-label { display: none; }                    /* the button keeps its aria-label */
+  /* Ask menu open: every label closes, so the five items are evenly spaced and Ask SIKAD sits in the centre; the others step back. */
+  .bottom-nav .nav-btn { transition: transform var(--dur-micro) var(--ease-out), background-color var(--dur-enter) var(--ease-out), color var(--dur-enter) var(--ease-out), opacity var(--dur-enter) var(--ease-out); }
+  .bottom-nav.ask-on .nav-btn { opacity: .45; }
+  .bottom-nav.ask-on .nav-btn.on { background: transparent; color: var(--ink-3); }
+  .bottom-nav.ask-on .nav-btn svg, .bottom-nav.ask-on .nav-btn.on svg { transform: scale(.8); }
+  .bottom-nav.ask-on .nav-btn.on .nav-label { grid-template-columns: 0fr; opacity: 0; margin-left: 0; }
+  .bottom-nav.ask-on .ask-menu { transform-origin: 50% calc(100% + 34px); }
   .ask-menu {
     position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); padding: 6px 8px 8px;
     border-radius: var(--radius-xl); box-shadow: var(--shadow-2); transform-origin: var(--ask-x, 50%) calc(100% + 34px);
@@ -1081,6 +1111,7 @@ body.spotlight .focus { z-index: 36; }
   }
   .rail-brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 16px; font-family: var(--font-display); font-size: 20px; line-height: 26px; font-weight: 800; letter-spacing: -.02em; color: var(--ink); }
   .rail-brand .logo { width: 32px; height: 32px; }
+  .rail-brand .lockup { width: 96px; }
   .nav-btn { flex-direction: row; justify-content: flex-start; gap: 12px; min-height: var(--target); padding: 10px 12px; font-size: 14px; line-height: 20px; border-radius: var(--radius-md); }
   .nav-btn:hover { background: var(--surface-2); }
   .nav-btn.on { background: var(--surface-2); color: var(--ink); }

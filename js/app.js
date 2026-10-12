@@ -79,11 +79,15 @@
     braindump: '<svg viewBox="0 0 24 24"><path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-8l-4.5 4v-4H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/><path d="M8 9h8M8 12.5h5"/></svg>',
     chevron: '<svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>',
     back: '<svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>',
+    // SIKAD route mark (geometry from icons/sikad.svg) for the Ask SIKAD button: takes the button's icon colour, Butter destination dot.
+    mark: '<svg class="mark-icon" viewBox="92 80 330 330"><path d="M149 366C250 345 345 285 268 241S290 150 366 123" stroke-width="24"/><circle cx="149" cy="366" r="37" fill="currentColor" stroke="none"/><circle class="mark-next" cx="366" cy="123" r="29" stroke-width="16"/></svg>',
     more: '<svg viewBox="0 0 24 24"><path d="M12 5.5v.01M12 12v.01M12 18.5v.01" stroke-width="2.5"/></svg>',
     sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>',
     moon: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
   };
   // SIKAD mark: a short path with the next step ahead of it (design.md §10).
+  // Full logo (route mark + IKAD), same geometry as icons/sikad-whole.svg; colours come from the tokens.
+  const LOCKUP = '<svg class="lockup" viewBox="45 66 552 242" aria-hidden="true"><path class="lk-route" pathLength="1" d="M80.765 272.938c75.791-15.359 147.08-59.242 89.299-91.424-57.782-32.181 16.509-66.556 73.54-86.304"/><circle class="lk-start" cx="80.765" cy="272.938" r="27.4"/><circle class="lk-next" cx="243.604" cy="95.21" r="21.5"/><path class="lk-letter" style="--i:0" d="M225.8 267V155.25h20.4V267z"/><path class="lk-letter" style="--i:1" d="M267.695 267V155.25h20.4v58.2l-5.55-1.95 47.55-56.25h25.65l-44.55 52.8 1.2-14.4 44.7 73.35h-24l-30-49.2-15 17.85V267z"/><path class="lk-letter" style="--i:2" d="M360.351 267l38.55-111.75h26.4L463.851 267h-22.2l-7.95-24h-43.2l-8.1 24zm36-42h31.5l-18.6-55.65h5.7z"/><path class="lk-letter" style="--i:3" d="M476.288 267V155.25h36.45q17.7 0 30.75 7.2 13.2 7.05 20.4 19.65 7.2 12.45 7.2 28.95 0 16.35-7.2 29.1-7.2 12.6-20.4 19.8-13.05 7.05-30.75 7.05zm20.4-18h16.5q11.4 0 19.65-4.65 8.4-4.8 13.05-13.2 4.65-8.55 4.65-20.1 0-11.7-4.65-20.1t-13.05-13.05q-8.25-4.65-19.65-4.65h-16.5z"/></svg>';
   const LOGO = '<svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><path class="logo-path" d="M13.97 34.31C23.44 32.34 32.34 26.72 25.13 22.59S27.19 14.06 34.31 11.53"/><circle class="logo-step" cx="13.97" cy="34.31" r="3.6"/><circle class="logo-next" cx="34.31" cy="11.53" r="2.8"/></svg>';
 
   // ------------------------------------------------------------- theme --
@@ -312,7 +316,13 @@
       }
       const menu = nav.querySelector('.ask-menu'), fab = nav.querySelector('.fab');
       if (menu) menu.style.setProperty('--ask-x', `${fab.offsetLeft + fab.offsetWidth / 2 - menu.offsetLeft}px`);
-      if (open !== menuWasOpen) nav.classList.add('menu-toggled');
+      if (open !== menuWasOpen) {
+        nav.classList.add('menu-toggled');
+        // Same replay for the Ask state: start from the previous layout so the items slide and shrink instead of jumping.
+        nav.classList.add('no-anim'); nav.classList.toggle('ask-on', menuWasOpen);
+        void nav.offsetWidth;
+        nav.classList.remove('no-anim'); nav.classList.toggle('ask-on', open);
+      }
       if (open && !menuWasOpen) nav.parentNode.querySelectorAll('.ask-scrim, .ask-menu').forEach((el) => el.classList.add('is-opening'));
       if (!open && !ui.sheet) for (const el of oldMenu) { if (el.classList.contains('ask-menu')) nav.appendChild(el); else nav.before(el); leave(el, 'is-closing', 160); }
     }
@@ -430,8 +440,7 @@
   function obWelcome() {
     return `
       <div class="ob-welcome">
-        ${LOGO}
-        <h1 class="brand">SIKAD</h1>
+        <h1 class="brand">${LOCKUP}<span class="sr-only">SIKAD</span></h1>
         <p class="tagline">Find your next move.</p>
         <p class="lead">See what you can realistically get done with the time you actually have.</p>
         <label class="field">
@@ -825,11 +834,11 @@
           ${ui.offline ? `<p class="offline-banner" role="status">${ICON.info}<span>You're offline. Your plan still works. Syncing resumes when you're back.</span></p>` : ''}
           ${views[ui.tab]()}</main>
         ${ui.askMenu ? '<div class="ask-scrim" data-action="askMenuClose" aria-hidden="true"></div>' : ''}
-        <nav class="bottom-nav" aria-label="Main">
-          <div class="rail-brand" aria-hidden="true">${LOGO}<span>SIKAD</span></div>
+        <nav class="bottom-nav ${ui.askMenu ? 'ask-on' : ''}" aria-label="Main">
+          <div class="rail-brand" aria-hidden="true">${LOCKUP}</div>
           ${navBtn('home', 'Home', ICON.home)}
           ${navBtn('week', 'Overview', ICON.week)}
-          <button class="fab" data-action="askMenu" aria-haspopup="dialog" aria-expanded="${!!ui.askMenu}" aria-label="Ask SIKAD: ask about your plan, add a task or report a change"><span class="fab-circle">${ui.askMenu ? ICON.close : ICON.braindump}</span><span class="fab-label">Ask SIKAD</span></button>
+          <button class="fab" data-action="askMenu" aria-haspopup="dialog" aria-expanded="${!!ui.askMenu}" aria-label="Ask SIKAD: ask about your plan, add a task or report a change"><span class="fab-circle">${ui.askMenu ? ICON.close : ICON.mark}</span><span class="fab-label">Ask SIKAD</span></button>
           ${navBtn('tasks', 'Tasks', ICON.tasks)}
           ${navBtn('profile', 'Profile', ICON.user)}
           ${ui.askMenu ? askMenu() : ''}
@@ -2703,15 +2712,20 @@
     backdrop(ds, el, e) { if (e.target === el) A.closeSheet(); },
   });
 
-  /** Dismissing Ask SIKAD must not throw away what the student typed. */
+  /**
+   * Dismissing Ask SIKAD must not throw away what the student typed. Everything else starts fresh
+   * next time: answered questions are cleared, and an example question is never kept as a draft.
+   */
+  const ownDraft = (text) => { const t = (text || '').trim(); return t && !D.QUESTIONS.includes(t) ? t : null; };
   function keepDraft() {
     if (!ui.sheet) return;
+    if (ui.sheet.type === 'dump' || ui.sheet.type === 'proposal') ui.askThread = [];
     if (ui.sheet.type === 'dump') {
-      ui.dumpDraft = (ui.sheet.text || '').trim() || null;
+      ui.dumpDraft = ownDraft(ui.sheet.text);
       const f = ui.sheet.form;
       ui.formDraft = f && (f.title.trim() || (f.notes || '').trim() || f.deadline != null) ? f : null;
     }
-    if (ui.sheet.type === 'proposal') ui.dumpDraft = (ui.sheet.review.text || '').trim() || null;
+    if (ui.sheet.type === 'proposal') ui.dumpDraft = ownDraft(ui.sheet.review.text);
   }
 
   /** The student has said how the session went: record it, update the task and replan. */
@@ -2933,6 +2947,16 @@
 
   // Deep link: open the tab named in the URL (e.g. index.html#tasks).
   if (state.onboarded && TABS.includes(location.hash.slice(1).split('/')[0])) readRoute();
+
+  // App-open intro (motion-spec §5.7): pure CSS; this only lets a tap skip it and removes the node afterwards.
+  const intro = document.getElementById('intro');
+  if (intro) {
+    if (getComputedStyle(intro).display === 'none') intro.remove();
+    else {
+      intro.addEventListener('animationend', (e) => { if (e.target === intro) intro.remove(); });
+      intro.addEventListener('pointerdown', () => intro.classList.add('is-skipped'));
+    }
+  }
 
   syncClock(true);   // a plan saved earlier is brought up to the real current time before first paint
   render();
