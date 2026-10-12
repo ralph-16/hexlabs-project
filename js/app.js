@@ -84,7 +84,7 @@
     moon: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
   };
   // SIKAD mark: a short path with the next step ahead of it (design.md §10).
-  const LOGO = '<svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><path class="logo-path" d="M6 41c10 0 11-9 17-13s10-3 12-7"/><circle class="logo-step" cx="10.5" cy="40.4" r="2.6"/><circle class="logo-step" cx="22" cy="29" r="2.6"/><circle class="logo-next" cx="38.5" cy="13.5" r="5.5"/></svg>';
+  const LOGO = '<svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><path class="logo-path" d="M13.97 34.31C23.44 32.34 32.34 26.72 25.13 22.59S27.19 14.06 34.31 11.53"/><circle class="logo-step" cx="13.97" cy="34.31" r="3.6"/><circle class="logo-next" cx="34.31" cy="11.53" r="2.8"/></svg>';
 
   // ------------------------------------------------------------- theme --
   // Light/dark toggle. The choice is a per-device convenience kept in localStorage;
