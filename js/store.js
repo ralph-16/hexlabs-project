@@ -15,7 +15,7 @@
 
   function initialState() {
     return {
-      version: 1, onboarded: false, onboardStep: 0, now: D.DEMO_START,
+      version: 1, onboarded: false, onboardStep: 0, now: T.now(),
       user: { name: '' },
       baseline: { dayStart: '06:00', dayEnd: '22:00', commuteMins: 60, bufferMins: 15, routineMins: 30, protectLunch: false, classes: [], recurring: [] },
       integrations: {},
@@ -210,7 +210,8 @@
    * `overdue` is the still-open task behind the block that was not done.
    */
   function seedPastWeek(state, overdue) {
-    const at = (d, h, mi) => T.make(2026, 10, d, h, mi);
+    const monday = T.addDays(T.dayStart(T.endOfWeek(state.now)), -13);   // Monday of last week
+    const at = (d, h, mi) => T.at(T.addDays(monday, d - 5), h * 60 + mi);
     const rows = [   // [day, start, end, course, title, due]
       [5, [12, 15], [13, 45], 'IT 207', 'Stakeholder and Problem Analysis', at(5, 17, 0)],
       [5, [20, 0], [20, 45], 'IT 203', 'OOP Concepts Quiz', at(5, 23, 59)],
@@ -522,7 +523,7 @@
     log(state, 'Phase 2 · Brain dump', D.SAMPLE_BRAIN_DUMP, P.toPhase2(parsed));
     for (const i of parsed.intents) if (i.type === 'task') state.tasks.push(makeTask(state, i.task));
     // Carried over from last week: planned on Wednesday, never marked done, now past its deadline.
-    const overdue = makeTask(state, { title: 'Algorithm Tracing Worksheet', context: 'IT 205', deadline: T.make(2026, 10, 7, 23, 59), durationMins: 60, isAiEstimate: true });
+    const overdue = makeTask(state, { title: 'Algorithm Tracing Worksheet', context: 'IT 205', deadline: T.at(T.addDays(T.dayStart(T.endOfWeek(state.now)), -11), '23:59'), durationMins: 60, isAiEstimate: true });
     state.tasks.push(overdue);
     seedPastWeek(state, overdue);
     state.onboarded = true;

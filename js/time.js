@@ -2,9 +2,9 @@
  * SIKAD — wall-clock time helpers.
  *
  * All times are stored as "wall-clock milliseconds": a UTC timestamp whose UTC
- * fields equal the student's local wall time (Asia/Manila, +08:00). This keeps
- * the demo reproducible no matter what timezone the browser runs in, and lets
- * us emit ISO 8601 strings with a fixed offset as required by prompt.md.
+ * fields equal the student's local wall time on this device. "Now" always comes
+ * from the device clock and timezone (T.now); nothing in the product simulates
+ * time. ISO 8601 strings carry the device's UTC offset.
  */
 (function (root) {
   'use strict';
@@ -12,7 +12,10 @@
   const MIN = 60000;
   const HOUR = 60 * MIN;
   const DAY = 24 * HOUR;
-  const OFFSET = '+08:00';
+  /** Minutes the device's local time is ahead of UTC at a given instant (handles DST). */
+  const tzMins = (real) => -new Date(real).getTimezoneOffset();
+  const offsetLabel = (m) => (m < 0 ? '-' : '+') + String(Math.floor(Math.abs(m) / 60)).padStart(2, '0') + ':' + String(Math.abs(m) % 60).padStart(2, '0');
+  const OFFSET = offsetLabel(tzMins(Date.now()));
   const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
@@ -23,6 +26,8 @@
   const T = {
     MIN, HOUR, DAY, OFFSET, DAY_NAMES, DAY_SHORT, MONTHS,
 
+    /** The real current local minute as wall-clock ms. Tests may replace this; the app never does. */
+    now() { const real = Date.now(); return Math.floor(real / MIN) * MIN + tzMins(real) * MIN; },
     make(y, mo, d, h = 0, mi = 0) { return Date.UTC(y, mo - 1, d, h, mi); },
     parts(ms) {
       const d = new Date(ms);

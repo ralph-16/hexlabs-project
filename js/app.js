@@ -18,6 +18,9 @@
     focusPick: null,    // session id while the student is choosing a working method
     spotlightOff: false, // the student un-dimmed the screen during Focus Mode; the session keeps running
     dock: false,        // judge-tools panel open (judge mode only)
+    sub: null,          // Profile sub-view: null (landing) | 'classes' | 'commitments'
+    accOpen: {},        // weekday → true while its Class schedule section is expanded
+    accJust: null,      // weekday whose section was just opened (plays the reveal once)
     integrationState: {}, // id → { status: idle|connecting|connected|error, account, lastSync, imported, error } (this visit only)
     ob: state.obDraft || freshOnboarding(),
   };
@@ -76,6 +79,7 @@
     braindump: '<svg viewBox="0 0 24 24"><path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-8l-4.5 4v-4H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/><path d="M8 9h8M8 12.5h5"/></svg>',
     chevron: '<svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>',
     back: '<svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>',
+    more: '<svg viewBox="0 0 24 24"><path d="M12 5.5v.01M12 12v.01M12 18.5v.01" stroke-width="2.5"/></svg>',
     sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>',
     moon: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
   };
@@ -127,6 +131,7 @@
   })();
   let versionTaps = 0, versionTimer = 0;
   const versionText = () => `<button class="version" data-action="versionTap">${VERSION}</button>`;
+  const FTF_LABEL = '<span class="nowrap">Face-to-face</span>';   // never split at the hyphens
   const sampleNote = (text) => `<p class="sample-note">${ICON.info}<span>${esc(text)}</span></p>`;
 
   function judgeDock() {
@@ -137,13 +142,6 @@
       <aside class="judge-dock ${on ? '' : 'in-setup'}" aria-label="Judge tools">
         <button class="judge-pill" data-action="dockToggle" aria-expanded="${!!ui.dock}">${ICON.clock}<span>Judge tools</span></button>
         ${ui.dock ? `<div class="judge-panel">
-          ${on ? `<p class="jd-label">Clock</p>
-            <div class="jd-row">
-              <button class="jd-btn jd-now num" data-action="openClock" aria-label="Set the clock, now ${T.short(now())} ${T.time(now())}">${T.DAY_SHORT[T.dow(now())]} ${T.time(now())}</button>
-              <button class="jd-btn" data-action="advance" data-mins="15" aria-label="Advance clock 15 minutes">+15m</button>
-              <button class="jd-btn" data-action="advance" data-mins="60" aria-label="Advance clock 1 hour">+1h</button>
-              <button class="jd-btn" data-action="nextMorning" aria-label="Jump clock to next morning">Next day</button>
-            </div>` : ''}
           ${running ? `<div class="jd-row"><button class="jd-btn" data-action="focusSkip" data-mins="5">Skip session ahead 5 min</button></div>` : ''}
           <p class="jd-label">Sample week</p>
           <div class="jd-row">
@@ -223,26 +221,33 @@
   // Browser/phone Back works like a native app: it closes an open sheet, then steps
   // back through tabs. Each tab has a URL (#home, #week, #tasks, #profile).
   const TABS = ['home', 'week', 'tasks', 'profile'];
+  const SUBS = ['classes', 'commitments'];               // Profile management views (#profile/classes)
+  const route = () => (ui.tab === 'profile' && ui.sub ? `profile/${ui.sub}` : ui.tab);
+  function readRoute() {
+    const [t, sub] = location.hash.slice(1).split('/');
+    ui.tab = TABS.includes(t) ? t : 'home';
+    ui.sub = ui.tab === 'profile' && SUBS.includes(sub) ? sub : null;
+  }
   let lastTab = null, fromPop = false, popsToIgnore = 0;
   function syncHistory(opening, closing) {
     if (!state.onboarded) { lastTab = null; return; }
-    const tabChanged = lastTab !== null && lastTab !== ui.tab;
-    lastTab = ui.tab;
+    const tabChanged = lastTab !== null && lastTab !== route();
+    lastTab = route();
     if (fromPop) return;                                   // the browser already moved; nothing to record
     const onSheetEntry = history.state && history.state.sikad === 'sheet';
     try {
       if (opening) history.pushState({ sikad: 'sheet' }, '');
-      else if (closing && onSheetEntry && tabChanged) history.replaceState({ sikad: 'tab' }, '', '#' + ui.tab);
+      else if (closing && onSheetEntry && tabChanged) history.replaceState({ sikad: 'tab' }, '', '#' + route());
       else if (closing && onSheetEntry) { popsToIgnore++; history.back(); }
-      else if (tabChanged) history.pushState({ sikad: 'tab' }, '', '#' + ui.tab);
+      else if (tabChanged) history.pushState({ sikad: 'tab' }, '', '#' + route());
     } catch (e) { /* history unavailable (sandboxed frame): navigation still works without it */ }
   }
   window.addEventListener('popstate', () => {
     if (popsToIgnore > 0) { popsToIgnore--; return; }
     fromPop = true;
     if (ui.sheet) { stopVoice(); keepDraft(); ui.sheet = null; }
-    const t = location.hash.slice(1);
-    ui.tab = TABS.includes(t) ? t : 'home';
+    ui.askMenu = false;
+    readRoute();
     ui.focusOnly = false;
     render();
     fromPop = false;
@@ -291,18 +296,43 @@
     return !!next && next.id === ui.focusPick;
   }
 
+  /**
+   * Nav pill and Ask menu (motion-spec §5.6). The HTML is rebuilt on every render, so the new nav is
+   * first put back in its previous state, then released: CSS transitions carry the active item across.
+   */
+  let navTab = null, menuWasOpen = false;
+  function navMotion(oldMenu) {
+    const nav = $app.querySelector('.bottom-nav'), tab = nav ? ui.tab : null, open = !!(nav && ui.askMenu);
+    if (nav && !M.reduced()) {
+      const was = navTab && navTab !== tab && nav.querySelector(`.nav-btn[data-tab="${navTab}"]`), is = nav.querySelector('.nav-btn.on');
+      if (was && is) {
+        nav.classList.add('no-anim'); is.classList.remove('on'); was.classList.add('on');
+        void nav.offsetWidth;
+        nav.classList.remove('no-anim'); was.classList.remove('on'); is.classList.add('on');
+      }
+      const menu = nav.querySelector('.ask-menu'), fab = nav.querySelector('.fab');
+      if (menu) menu.style.setProperty('--ask-x', `${fab.offsetLeft + fab.offsetWidth / 2 - menu.offsetLeft}px`);
+      if (open !== menuWasOpen) nav.classList.add('menu-toggled');
+      if (open && !menuWasOpen) nav.parentNode.querySelectorAll('.ask-scrim, .ask-menu').forEach((el) => el.classList.add('is-opening'));
+      if (!open && !ui.sheet) for (const el of oldMenu) { if (el.classList.contains('ask-menu')) nav.appendChild(el); else nav.before(el); leave(el, 'is-closing', 160); }
+    }
+    navTab = tab; menuWasOpen = open;
+  }
+
   function render() {
     const after = pending && pending.after;
     if (pending) { clearTimeout(pending.timer); pending = null; }
+    clockDirty = false;
     state.obDraft = state.onboarded ? null : ui.ob;
     S.save(state);
     const opening = !!ui.sheet && !sheetWasOpen, closing = !ui.sheet && sheetWasOpen;
     syncHistory(opening, closing);
     if (opening) sheetOpener = describe(document.activeElement);
     const keep = !opening && !closing ? focusKey(document.activeElement) : null;
-    const viewKey = state.onboarded ? `app:${ui.tab}:${ui.focusOnly ? 'one' : 'all'}` : `ob:${ui.ob.step}`;
+    const viewKey = state.onboarded ? `app:${route()}:${ui.focusOnly ? 'one' : 'all'}` : `ob:${ui.ob.step}`;
     const sheetKey = ui.sheet ? `${ui.sheet.type}:${ui.sheet.mode || ''}` : null;
     const snap = M.capture($app);
+    const oldMenu = menuWasOpen && !ui.askMenu ? [...$app.querySelectorAll('.ask-scrim, .ask-menu')] : [];
     const oldSheet = $sheet.querySelector('.sheet-backdrop:not(.is-closing)');
     const sheetScroll = oldSheet && sheetKey === lastSheetKey ? oldSheet.firstElementChild.scrollTop : 0;
     $app.innerHTML = (state.onboarded ? shell() : onboarding()) + judgeDock();
@@ -313,6 +343,8 @@
       else if (sheetScroll) $sheet.firstElementChild.firstElementChild.scrollTop = sheetScroll;   // re-rendering a sheet keeps your place
     }
     lastSheetKey = sheetKey;
+    navMotion(oldMenu);
+    document.body.classList.toggle('ask-open', !!ui.askMenu);
     document.body.classList.toggle('sheet-open', !!ui.sheet);
     document.body.classList.toggle('spotlight', spotlightOn());
     $app.toggleAttribute('inert', !!ui.sheet);
@@ -549,7 +581,7 @@
         account: sampleAccount(),
         // Work that is already a task (any status) is not offered again.
         items: (D.SAMPLE_ASSIGNMENTS[i.id] || []).filter((x) => !state.tasks.some((t) => t.title.toLowerCase() === x.title.toLowerCase()))
-          .map((x) => ({ title: x.title, course: x.course, mins: x.mins, due: T.make(2026, ...x.due), source: i.id })),
+          .map((x) => ({ title: x.title, course: x.course, mins: x.mins, due: T.at(T.addDays(T.dayStart(now()), x.due[0]), x.due[1] * 60 + x.due[2]), source: i.id })),
       }), 1200)),
     };
   }
@@ -789,20 +821,32 @@
     return `
       <div class="screen app">
         <button class="skip-link" data-action="skipToMain">Skip to main content</button>
-        <main class="view view-${ui.tab}" id="main" tabindex="-1">
+        <main class="view view-${ui.tab}" id="main" tabindex="-1" ${ui.askMenu ? 'inert' : ''}>
           ${ui.offline ? `<p class="offline-banner" role="status">${ICON.info}<span>You're offline. Your plan still works. Syncing resumes when you're back.</span></p>` : ''}
           ${views[ui.tab]()}</main>
+        ${ui.askMenu ? '<div class="ask-scrim" data-action="askMenuClose" aria-hidden="true"></div>' : ''}
         <nav class="bottom-nav" aria-label="Main">
           <div class="rail-brand" aria-hidden="true">${LOGO}<span>SIKAD</span></div>
           ${navBtn('home', 'Home', ICON.home)}
           ${navBtn('week', 'Overview', ICON.week)}
-          <button class="fab" data-action="openDump" aria-label="Ask SIKAD: ask about your plan, add a task or report a change"><span class="fab-circle">${ICON.braindump}</span><span class="fab-label">Ask SIKAD</span></button>
+          <button class="fab" data-action="askMenu" aria-haspopup="dialog" aria-expanded="${!!ui.askMenu}" aria-label="Ask SIKAD: ask about your plan, add a task or report a change"><span class="fab-circle">${ui.askMenu ? ICON.close : ICON.braindump}</span><span class="fab-label">Ask SIKAD</span></button>
           ${navBtn('tasks', 'Tasks', ICON.tasks)}
           ${navBtn('profile', 'Profile', ICON.user)}
+          ${ui.askMenu ? askMenu() : ''}
         </nav>
       </div>`;
   }
-  const navBtn = (tab, label, icon) => `<button class="nav-btn ${ui.tab === tab ? 'on' : ''}" data-action="tab" data-tab="${tab}" ${ui.tab === tab ? 'aria-current="page"' : ''}>${icon}<span>${label}</span></button>`;
+  const navBtn = (tab, label, icon) => `<button class="nav-btn ${ui.tab === tab ? 'on' : ''}" data-action="tab" data-tab="${tab}" ${ui.tab === tab ? 'aria-current="page"' : ''}>${icon}<span class="nav-label"><span>${label}</span></span></button>`;
+  /** Ask SIKAD opens from its nav item into two ways in. Both end in the same review and replan. */
+  function askMenu() {
+    const opt = (v, icon, title, desc, draft) => `<button class="ask-opt" data-action="askMode" data-v="${v}">
+      <span class="ask-opt-icon">${icon}</span><span class="ask-opt-text"><b>${title}</b><span>${desc}</span>${draft ? '<span class="ask-opt-note">Your draft is saved here.</span>' : ''}</span></button>`;
+    return `<div class="ask-menu" id="ask-menu" role="dialog" aria-labelledby="ask-menu-title">
+      <div class="ask-menu-head"><h2 id="ask-menu-title">Ask SIKAD</h2><button class="icon-btn" data-action="askMenuClose" aria-label="Close">${ICON.close}</button></div>
+      ${opt('text', ICON.mic, 'Speak or type', 'Ask a question or say what changed, in your own words.', ui.dumpDraft)}
+      ${opt('form', ICON.tasks, 'Form', 'Add a task with a name, deadline and time needed.', ui.formDraft)}
+    </div>`;
+  }
 
   // ------------------------------------------------------------------ HOME --
   function homeView() {
@@ -1154,7 +1198,7 @@
     if (it.fixed) {
       icon = ICON.lock; node = 'n-fixed';
       const type = it.kind === 'class' ? `Class · ${it.mode === 'FTF' ? 'Face-to-face' : 'Online'}` : it.occ.source === 'temporary' ? 'One-time' : 'Weekly';
-      meta += ` · ${type}`;
+      meta += ` · ${type.replace('Face-to-face', FTF_LABEL)}`;
       action = `data-action="openFixed" data-id="${esc(it.occ.id)}" data-day="${T.dayStart(it.start)}"`;
       label = `${it.title}, ${type}, fixed, ${range}`;
     } else if (it.kind === 'task') {
@@ -1315,7 +1359,7 @@
     const range = T.range(it.start, it.end);
     let icon = ICON.lock, node = 'n-fixed', meta = range, chip = '', cls = `k-${it.kind} fixed`;
     if (it.fixed) {
-      meta += ` · ${it.kind === 'class' ? `Class · ${it.mode === 'FTF' ? 'Face-to-face' : 'Online'}` : it.occ.source === 'temporary' ? 'One-time' : 'Weekly'}`;
+      meta += ` · ${it.kind === 'class' ? `Class · ${it.mode === 'FTF' ? FTF_LABEL : 'Online'}` : it.occ.source === 'temporary' ? 'One-time' : 'Weekly'}`;
     } else if (it.kind === 'unplanned') {
       icon = ICON.check; node = 'n-done'; cls = 'k-done';
       meta = it.start === it.end ? `Completed · ${T.time(it.start)}` : range;
@@ -1380,36 +1424,30 @@
       for (let m = from; m <= to; m += 30) { const hm = T.minsToHm(m); o += `<option value="${hm}" ${hm === sel ? 'selected' : ''}>${T.hmLabel(hm)}</option>`; }
       return o;
     };
-    const classes = b.classes.slice().sort((a, c) => ((a.day + 6) % 7) - ((c.day + 6) % 7) || T.hmToMins(a.start) - T.hmToMins(c.start));
-    const classDays = [1, 2, 3, 4, 5, 6, 0].map((d) => [d, classes.filter((c) => c.day === d)]).filter(([, list]) => list.length);
+    if (ui.sub === 'classes') return classEditor();
+    if (ui.sub === 'commitments') return commitManager();
+    const subjects = new Set(b.classes.map((c) => c.title)).size;
+    const classSum = b.classes.length ? `${plural(subjects, 'class', 'classes')} · ${plural(b.classes.length, 'session')} · ${daySpan(b.classes.map((c) => c.day))}` : 'No classes yet.';
+    const groups = commitGroups();
+    const nOf = (cat) => groups.filter((g) => g.cat === cat).length;
+    const commitSum = groups.length ? [[nOf('work'), 'work schedule'], [nOf('org'), 'organization'], [nOf('other'), 'other']].filter(([n]) => n).map(([n, w]) => (w === 'other' ? `${n} other` : plural(n, w))).join(' · ') : 'None yet.';
+    const clashes = clashPairs(b.classes.concat(b.recurring));
     const theme = themeSetting();
     const COMMUTE_STEPS = [15, 30, 45, 60, 75, 90, 120, 150, 180];
     const commuteOpts = COMMUTE_STEPS.includes(b.commuteMins) ? COMMUTE_STEPS : COMMUTE_STEPS.concat(b.commuteMins).sort((x, y) => x - y);
-    const upcomingEvents = state.events.filter((e) => e.end > now()).sort((a, c) => a.start - c.start);
     return `
       <header class="home-head"><h1>${esc(state.user.name || 'You')}</h1><p class="head-sub">Profile and settings</p></header>
       <div class="cols profile">
       <div class="col-a">
-      <section class="card settings p-classes">
-        <div class="list-head"><h2>Class schedule</h2><span class="fixed-tag">${ICON.lock}Fixed</span></div>
-        ${classDays.map(([d, list]) => {
-          const mins = list.reduce((a, c) => a + T.hmToMins(c.end) - T.hmToMins(c.start), 0);
-          return `<div class="day-group">
-            <div class="dg-head"><h3>${T.DAY_NAMES[d]}</h3><span class="small muted num">${list.length} class${list.length === 1 ? '' : 'es'} · ${T.dur(mins)}</span></div>
-            <ul class="plain fixed-list">${list.map((c) => `<li><span class="num">${ICON.lock}<b>${esc(c.title)}</b> · ${T.hmLabel(c.start)}–${T.hmLabel(c.end)} · ${c.mode === 'FTF' ? 'Face-to-face' : 'Online'}</span><button class="btn small ghost" aria-label="Remove ${esc(c.title)} on ${T.DAY_NAMES[c.day]}" data-action="removeClass" data-id="${c.id}">Remove</button></li>`).join('')}</ul>
-          </div>`;
-        }).join('') || '<p class="muted">No classes.</p>'}
-        <details class="add"><summary>${ICON.plus}Add a class</summary>
-          <div class="grid2 add-form" id="add-class">
-            <label>Subject<input name="title" placeholder="e.g. IT 203"></label>
-            <label>Day<select name="day">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<option value="${d}">${T.DAY_NAMES[d]}</option>`).join('')}</select></label>
-            <label>Start<input type="time" name="start" value="08:00"></label>
-            <label>End<input type="time" name="end" value="10:00"></label>
-            <label>Mode<select name="mode"><option>FTF</option><option>Online</option></select></label>
-            <button class="btn small" data-action="addClass">Add class</button>
-          </div>
-        </details>
+      <section class="card settings manage-card p-classes">
+        <div class="mc-text"><h2>Class schedule</h2><p class="mc-sum num">${classSum}</p></div>
+        <button class="btn small" data-action="profileOpen" data-sub="classes" aria-label="Manage class schedule">Manage${ICON.chevron}</button>
       </section>
+      <section class="card settings manage-card p-commit">
+        <div class="mc-text"><h2>Recurring commitments</h2><p class="mc-desc">Work, organizations, and other regular activities</p><p class="mc-sum num">${commitSum}</p></div>
+        <button class="btn small" data-action="profileOpen" data-sub="commitments" aria-label="Manage recurring commitments">Manage${ICON.chevron}</button>
+      </section>
+      ${clashes ? `<p class="mc-clash">${ICON.overlap}<span>${plural(clashes, 'weekly overlap')} to review. Open the schedule to see ${clashes === 1 ? 'it' : 'them'}.</span></p>` : ''}
       <section class="card settings limits" aria-labelledby="limits-title">
         <h2 id="limits-title">How SIKAD plans & its limits</h2>
         <ul class="limits-list">
@@ -1437,23 +1475,6 @@
       </section>
 
       <section class="card settings">
-        <div class="list-head"><h2>Recurring commitments</h2><span class="fixed-tag">${ICON.lock}Fixed</span></div>
-        <ul class="plain fixed-list">${b.recurring.map((r) => `<li><span class="num">${ICON.lock}<b>${esc(r.title)}</b> · Weekly · ${T.DAY_NAMES[r.day]} ${T.hmLabel(r.start)}–${T.hmLabel(r.end)}</span><button class="btn small ghost" aria-label="Remove ${esc(r.title)}" data-action="removeRecurring" data-id="${r.id}">Remove</button></li>`).join('') || '<li class="muted">None yet.</li>'}</ul>
-        <details class="add"><summary>${ICON.plus}Add a weekly commitment</summary>
-          <div class="grid2 add-form" id="add-rec">
-            <label>Name<input name="title" placeholder="e.g. Org meeting"></label>
-            <label>Type<select name="kind"><option value="work">Work</option><option value="org">Organization</option><option value="event">Other</option></select></label>
-            <label>Day<select name="day">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<option value="${d}">${T.DAY_NAMES[d]}</option>`).join('')}</select></label>
-            <label>Start<input type="time" name="start" value="17:00"></label>
-            <label>End<input type="time" name="end" value="19:00"></label>
-            <button class="btn small" data-action="addRecurringForm">Add</button>
-          </div>
-        </details>
-        ${upcomingEvents.length ? `<h3>One-time commitments</h3><ul class="plain fixed-list">${upcomingEvents.map((e) => `<li><span class="num">${ICON.lock}<b>${esc(e.title)}</b> · One-time · ${T.short(e.start)} ${T.range(e.start, e.end)}</span><button class="btn small ghost" aria-label="Remove ${esc(e.title)}" data-action="removeEvent" data-id="${e.id}">Remove</button></li>`).join('')}</ul>` : ''}
-        ${state.cancellations.length ? `<h3>Cancelled sessions</h3><ul class="plain">${state.cancellations.map((c) => `<li><span>${esc(cancellationLabel(c))}</span><button class="btn small" data-action="restoreOcc" data-id="${esc(c)}" aria-label="Restore ${esc(cancellationLabel(c))}">Restore</button></li>`).join('')}</ul>` : ''}
-      </section>
-
-      <section class="card settings">
         <h2 id="appearance-title">Appearance</h2>
         <div class="seg" role="radiogroup" aria-labelledby="appearance-title">
           ${[['light', 'Light'], ['dark', 'Dark'], ['system', 'System']].map(([v, label]) => `<button role="radio" aria-checked="${theme === v}" class="${theme === v ? 'on' : ''}" data-action="setTheme" data-v="${v}">${label}</button>`).join('')}
@@ -1475,6 +1496,215 @@
       </div>
       ${versionText()}`;
   }
+
+  // ---------- Profile management views: the weekly baseline (classes + recurring commitments) ----------
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`;
+  const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+  const dayRank = (d) => (d + 6) % 7;
+  const byDayTime = (a, c) => dayRank(a.day) - dayRank(c.day) || T.hmToMins(a.start) - T.hmToMins(c.start);
+  /** "Mon–Fri" when the days run together, otherwise "Mon, Wed, Fri". */
+  function daySpan(days) {
+    const u = [...new Set(days)].sort((a, c) => dayRank(a) - dayRank(c));
+    if (!u.length) return '';
+    const run = u.every((d, i) => i === 0 || dayRank(d) === dayRank(u[i - 1]) + 1);
+    return run && u.length > 2 ? `${T.DAY_SHORT[u[0]]}–${T.DAY_SHORT[u[u.length - 1]]}` : u.map((d) => T.DAY_SHORT[d]).join(', ');
+  }
+  const commitCat = (r) => (r.kind === 'work' ? 'work' : r.kind === 'org' ? 'org' : 'other');
+  /** Weekly rows that are the same commitment on different days are shown and edited as one entry. */
+  function commitGroups() {
+    const map = new Map();
+    for (const r of state.baseline.recurring) {
+      const key = [r.kind, r.title, r.start, r.end, r.notes || '', r.place || ''].join('|');
+      if (!map.has(key)) map.set(key, { ids: [], days: [], title: r.title, kind: r.kind, cat: commitCat(r), start: r.start, end: r.end, notes: r.notes || '', place: r.place || '', rows: [] });
+      const g = map.get(key); g.ids.push(r.id); g.days.push(r.day); g.rows.push(r);
+    }
+    return [...map.values()].sort((a, c) => byDayTime(a.rows.slice().sort(byDayTime)[0], c.rows.slice().sort(byDayTime)[0]));
+  }
+  /** Other fixed weekly items on the same day that overlap this one. Read-only: nothing is moved or replaced. */
+  function baselineClashes(rec) {
+    const s = T.hmToMins(rec.start), e = T.hmToMins(rec.end);
+    return state.baseline.classes.concat(state.baseline.recurring).filter((c) => c.id !== rec.id && c.day === rec.day && T.hmToMins(c.start) < e && T.hmToMins(c.end) > s);
+  }
+  /** How many overlapping pairs involve these rows (each pair counted once). */
+  function clashPairs(rows) {
+    const pairs = new Set();
+    for (const r of rows) for (const c of baselineClashes(r)) pairs.add([r.id, c.id].sort().join('|'));
+    return pairs.size;
+  }
+  const clashNote = (list) => (list.length ? `<span class="crow-clash">${ICON.overlap}Overlaps ${[...new Set(list.map((c) => esc(c.title)))].join(', ')}</span>` : '');
+  const subHead = (title, sub) => `
+      <header class="home-head sub-head">
+        <button class="back-link" data-action="profileBack">${ICON.back}Profile</button>
+        <h1>${title}</h1><p class="head-sub">${sub}</p>
+      </header>`;
+  const rowMenu = (label, edit, remove) => `
+        <details class="row-menu"><summary class="icon-btn" aria-label="Actions for ${esc(label)}">${ICON.more}</summary>
+          <div class="row-menu-list"><button ${edit}>Edit</button><button class="danger" ${remove}>Remove</button></div></details>`;
+  const clashPanel = (n) => (n ? `<div class="status-panel s-conflict" role="status">${ICON.overlap}<div><b>${plural(n, 'overlap')} to review</b><p>These are both fixed, so SIKAD keeps both and moves neither. Edit or remove one to resolve it.</p></div></div>` : '');
+
+  function classEditor() {
+    const b = state.baseline;
+    const days = WEEK_ORDER.filter((d) => (d >= 1 && d <= 5) || b.classes.some((c) => c.day === d));
+    const total = b.classes.reduce((a, c) => a + T.hmToMins(c.end) - T.hmToMins(c.start), 0);
+    const clashes = clashPairs(b.classes);
+    return `
+      <div class="subview">
+      ${subHead('Class schedule', b.classes.length ? `${plural(b.classes.length, 'session')} a week · ${T.dur(total)}. Fixed: SIKAD plans around them.` : 'Add your classes so SIKAD can plan around them.')}
+      <button class="btn primary block" data-action="classAdd">${ICON.plus}Add a class</button>
+      ${clashPanel(clashes)}
+      <section class="card acc" aria-label="Classes by weekday">
+        ${days.map((d) => {
+          const list = b.classes.filter((c) => c.day === d).sort(byDayTime), open = !!ui.accOpen[d];
+          const mins = list.reduce((a, c) => a + T.hmToMins(c.end) - T.hmToMins(c.start), 0);
+          return `<div class="acc-item ${open ? 'open' : ''}">
+            <h2 class="acc-h"><button class="acc-btn" data-action="accToggle" data-d="${d}" aria-expanded="${open}" aria-controls="acc-${d}">
+              <span class="acc-name">${T.DAY_NAMES[d]}</span><span class="acc-meta num">${list.length ? `${plural(list.length, 'class', 'classes')} · ${T.dur(mins)}` : 'No classes'}</span>${ICON.chevron}</button></h2>
+            ${open ? `<div class="acc-body ${ui.accJust === d ? 'is-opening' : ''}" id="acc-${d}">
+              ${list.length ? `<ul class="crows">${list.map((c) => `<li class="crow">
+                <div class="crow-main"><b>${esc(c.title)}</b>
+                  <span class="crow-meta num">${T.hmLabel(c.start)}–${T.hmLabel(c.end)} · ${c.mode === 'FTF' ? FTF_LABEL : 'Online'}${c.room ? ` · ${esc(c.room)}` : ''}</span>${clashNote(baselineClashes(c))}</div>
+                ${rowMenu(`${c.title} on ${T.DAY_NAMES[d]}`, `data-action="classEdit" data-id="${c.id}"`, `data-action="classRemove" data-id="${c.id}"`)}</li>`).join('')}</ul>`
+                : `<p class="acc-empty">No classes on ${T.DAY_NAMES[d]}.</p>`}
+              <button class="link acc-add" data-action="classAdd" data-d="${d}">Add a class on ${T.DAY_NAMES[d]}</button>
+            </div>` : ''}
+          </div>`;
+        }).join('')}
+      </section>
+      </div>`;
+  }
+
+  const COMMIT_CATS = [
+    { cat: 'work', title: 'Work schedule', add: 'Add work schedule', empty: 'No work schedule. Add one only if you have a job with regular hours.' },
+    { cat: 'org', title: 'Organizations', add: 'Add organization', empty: 'No organizations yet. Add one to keep its meetings free of tasks.' },
+    { cat: 'other', title: 'Other commitments', add: 'Add a commitment', empty: 'Nothing else repeats weekly. Add regular appointments or family time here.' },
+  ];
+  function commitManager() {
+    const groups = commitGroups();
+    const clashOf = (g) => g.rows.flatMap(baselineClashes).filter((c) => !g.ids.includes(c.id));
+    const upcomingEvents = state.events.filter((e) => e.end > now()).sort((a, c) => a.start - c.start);
+    return `
+      <div class="subview">
+      ${subHead('Recurring commitments', 'These repeat every week. SIKAD plans around them and never moves them.')}
+      ${clashPanel(clashPairs(state.baseline.recurring))}
+      ${COMMIT_CATS.map((k) => {
+        const list = groups.filter((g) => g.cat === k.cat);
+        return `<section class="card settings commit-cat" aria-labelledby="cat-${k.cat}">
+          <div class="list-head"><h2 id="cat-${k.cat}">${k.title}</h2>${list.length ? `<span class="small muted num">${list.length}</span>` : ''}</div>
+          ${list.length ? `<ul class="crows">${list.map((g) => `<li class="crow">
+            <div class="crow-main"><b>${esc(g.title)}</b>
+              <span class="crow-meta num">${daySpan(g.days)} · ${T.hmLabel(g.start)}–${T.hmLabel(g.end)}${g.place ? ` · ${esc(g.place)}` : ''}</span>
+              ${g.notes ? `<span class="crow-notes">${esc(g.notes)}</span>` : ''}${clashNote(clashOf(g))}</div>
+            ${rowMenu(g.title, `data-action="commitEdit" data-ids="${g.ids.join(',')}"`, `data-action="commitRemove" data-ids="${g.ids.join(',')}"`)}</li>`).join('')}</ul>`
+            : `<p class="acc-empty">${k.empty}</p>`}
+          <button class="btn small" data-action="commitAdd" data-kind="${k.cat}">${ICON.plus}${k.add}</button>
+        </section>`;
+      }).join('')}
+      ${upcomingEvents.length || state.cancellations.length ? `<section class="card settings">
+        <h2>One-time changes</h2>
+        <p class="small muted">Single dates only. These are not part of your weekly baseline and never become recurring on their own.</p>
+        ${upcomingEvents.length ? `<h3>One-time commitments</h3><ul class="plain fixed-list">${upcomingEvents.map((e) => `<li><span class="num">${ICON.lock}<b>${esc(e.title)}</b> · ${T.short(e.start)} ${T.range(e.start, e.end)}</span><button class="btn small ghost" aria-label="Remove ${esc(e.title)}" data-action="removeEvent" data-id="${e.id}">Remove</button></li>`).join('')}</ul>` : ''}
+        ${state.cancellations.length ? `<h3>Cancelled sessions</h3><ul class="plain">${state.cancellations.map((c) => `<li><span>${esc(cancellationLabel(c))}</span><button class="btn small" data-action="restoreOcc" data-id="${esc(c)}" aria-label="Restore ${esc(cancellationLabel(c))}">Restore</button></li>`).join('')}</ul>` : ''}
+      </section>` : ''}
+      </div>`;
+  }
+
+  // ---------- Add / edit forms for the weekly baseline (bottom sheets) ----------
+  const dayPicker = (f, err) => `
+        <fieldset class="day-pick"><legend>Days <span class="req">(one or more)</span></legend>
+          <div class="chips">${WEEK_ORDER.map((d) => `<button type="button" class="chip-btn ${f.days.includes(d) ? 'on' : ''}" aria-pressed="${f.days.includes(d)}" aria-label="${T.DAY_NAMES[d]}" data-action="formDay" data-d="${d}">${T.DAY_SHORT[d]}</button>`).join('')}</div>
+          ${err ? `<p class="field-error" role="alert">${ICON.alert}<span>Pick at least one day.</span></p>` : ''}
+        </fieldset>`;
+  const timePair = (f) => `
+        <div class="grid2">
+          <label>Start<input type="time" value="${esc(f.start)}" data-bind="sheet.form.start"></label>
+          <label>End<input type="time" value="${esc(f.end)}" data-bind="sheet.form.end"></label>
+        </div>`;
+  const segPick = (label, key, cur, opts) => `
+        <div class="seg-field"><span class="seg-label" id="seg-${key}">${label}</span>
+          <div class="seg" role="radiogroup" aria-labelledby="seg-${key}">${opts.map(([v, text]) => `<button type="button" role="radio" aria-checked="${cur === v}" class="${cur === v ? 'on' : ''}" data-action="formSet" data-k="${key}" data-v="${v}">${text}</button>`).join('')}</div></div>`;
+  const formClash = (sh) => (sh.conflicts && sh.conflicts.length ? `
+      <div class="status-panel s-conflict" role="alert">${ICON.overlap}<div><b>This overlaps a fixed commitment</b>
+        <p class="num">${sh.conflicts.map((c) => `${esc(c.title)} on ${c.dayName} (${T.hmLabel(c.start)}–${T.hmLabel(c.end)})`).join('; ')}.</p>
+        <p>Nothing is replaced. Change the day or time, or save anyway and both stay on your schedule marked as an overlap.</p></div></div>` : '');
+  const formActions = (sh, action, label) => `
+      <div class="sheet-actions">
+        <button class="btn" data-action="closeSheet">Cancel</button>
+        <button class="btn primary" data-action="${action}">${sh.conflicts && sh.conflicts.length ? 'Save anyway' : label}</button>
+      </div>`;
+
+  function classFormSheet() {
+    const sh = ui.sheet, f = sh.form;
+    return `
+      <h2 id="sheet-title" tabindex="-1">${sh.groupIds.length ? 'Edit class' : 'Add a class'}</h2>
+      <p class="sheet-sub">${sh.groupIds.length > 1 ? 'Changes apply to every day this class meets.' : 'Classes are fixed. SIKAD plans around them.'}</p>
+      <div class="form baseline-form">
+        <label>Subject or class name <span class="req">(required)</span><input value="${esc(f.title)}" data-bind="sheet.form.title" placeholder="e.g. IT 203" autocomplete="off"></label>
+        ${dayPicker(f, sh.dayError)}
+        ${timePair(f)}
+        ${segPick('Mode', 'mode', f.mode, [['FTF', 'Face-to-face'], ['Online', 'Online']])}
+        <label>Room or location <span class="req">(optional)</span><input value="${esc(f.room)}" data-bind="sheet.form.room" placeholder="e.g. Room 204" autocomplete="off"></label>
+      </div>
+      ${formClash(sh)}
+      ${formActions(sh, 'classSave', sh.groupIds.length ? 'Save changes' : 'Add class')}`;
+  }
+
+  const COMMIT_FIELDS = {
+    work: { name: 'Work role or schedule name', ph: 'e.g. Library assistant', missing: 'Name is missing. Type the role or job, e.g. "Library assistant".' },
+    org: { name: 'Organization name', ph: 'e.g. Junior Programmers Guild', missing: 'Name is missing. Type the organization, e.g. "Junior Programmers Guild".' },
+    other: { name: 'Commitment name', ph: 'e.g. Family dinner', missing: 'Name is missing. Type what the commitment is, e.g. "Family dinner".' },
+  };
+  function commitFormSheet() {
+    const sh = ui.sheet, f = sh.form, k = COMMIT_FIELDS[f.cat];
+    const savedOrgs = [...new Set(state.baseline.recurring.filter((r) => r.kind === 'org').map((r) => r.title))].filter((n) => n !== f.title.trim());
+    return `
+      <h2 id="sheet-title" tabindex="-1">${sh.groupIds.length ? 'Edit commitment' : 'Add a commitment'}</h2>
+      <p class="sheet-sub">Repeats every week on the days you pick. SIKAD plans around it.</p>
+      <div class="form baseline-form">
+        ${segPick('Category', 'cat', f.cat, [['work', 'Work'], ['org', 'Organization'], ['other', 'Other']])}
+        <label>${k.name} <span class="req">(required)</span><input value="${esc(f.title)}" data-bind="sheet.form.title" placeholder="${k.ph}" autocomplete="off"></label>
+        ${f.cat === 'org' && !sh.groupIds.length && savedOrgs.length ? `<div class="saved-orgs"><span class="seg-label">Your organizations</span><div class="chips">${savedOrgs.map((n) => `<button type="button" class="chip-btn" data-action="formSet" data-k="title" data-v="${esc(n)}">${esc(n)}</button>`).join('')}</div></div>` : ''}
+        ${f.cat === 'work' ? `<label>Workplace <span class="req">(optional)</span><input value="${esc(f.place)}" data-bind="sheet.form.place" placeholder="e.g. Campus library" autocomplete="off"></label>` : ''}
+        ${dayPicker(f, sh.dayError)}
+        ${timePair(f)}
+        <label>Notes <span class="req">(optional)</span><input value="${esc(f.notes)}" data-bind="sheet.form.notes" placeholder="e.g. Bring laptop" autocomplete="off"></label>
+      </div>
+      ${formClash(sh)}
+      ${formActions(sh, 'commitSave', sh.groupIds.length ? 'Save changes' : 'Add commitment')}`;
+  }
+
+  /** Shared checks for both baseline forms. Returns true when the form may be saved. */
+  function baselineFormOk(missingMsg) {
+    const sh = ui.sheet, f = sh.form, b = state.baseline;
+    if (!f.title.trim()) { flagField(document.querySelector('[data-bind="sheet.form.title"]'), missingMsg); return false; }
+    if (!f.days.length) { sh.dayError = true; render(); const c = document.querySelector('.day-pick .chip-btn'); if (c) c.focus(); return false; }
+    if (!f.start) { flagField(document.querySelector('[data-bind="sheet.form.start"]'), 'Start time is missing.'); return false; }
+    if (!f.end || f.end <= f.start) { flagField(document.querySelector('[data-bind="sheet.form.end"]'), 'End time must be later than the start time.'); return false; }
+    // Overlaps with other fixed weekly items are shown first; the student decides. Nothing is overwritten.
+    const others = { baseline: { classes: b.classes.filter((c) => !sh.groupIds.includes(c.id)), recurring: b.recurring.filter((r) => !sh.groupIds.includes(r.id)) } };
+    const hits = E.recurringConflicts(others, { days: f.days, start: f.start, end: f.end });
+    const key = `${f.days.join(',')}|${f.start}|${f.end}`;
+    if (hits.length && sh.conflictKey !== key) {
+      sh.conflicts = hits; sh.conflictKey = key; render();
+      const p = document.querySelector('.sheet .s-conflict'); if (p) p.scrollIntoView({ block: 'nearest' });
+      return false;
+    }
+    sh.conflicts = hits;
+    return true;
+  }
+  /** Write the form back to a weekly list: rows on kept days keep their id, new days are added, dropped days removed. */
+  function writeBaselineRows(listKey, prefix, groupIds, days, fields) {
+    const list = state.baseline[listKey];
+    const group = list.filter((r) => groupIds.includes(r.id));
+    for (const d of days) {
+      const row = group.find((r) => r.day === d) || { id: S.uid(state, prefix), day: d };
+      Object.assign(row, fields);
+      for (const k of Object.keys(row)) if (row[k] === '') delete row[k];
+      if (!list.includes(row)) list.push(row);
+    }
+    state.baseline[listKey] = list.filter((r) => !groupIds.includes(r.id) || days.includes(r.day));
+  }
+  /** Move focus to the page title after an in-app view change (same rule as browser Back). */
+  function focusHeading() { const h = document.querySelector('main h1'); if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } }
   function cancellationLabel(id) {
     const [ref, date] = id.split('@');
     const [kind, refId] = ref.split(':');
@@ -1485,9 +1715,27 @@
   // ================================================================ SHEETS ==
   function sheet() {
     const sh = ui.sheet;
-    const inner = { dump: dumpSheet, proposal: proposalSheet, task: taskSheet, fixed: fixedSheet, clock: clockSheet, engine: engineSheet, import: importSheet }[sh.type]();
+    const inner = { dump: dumpSheet, proposal: proposalSheet, task: taskSheet, fixed: fixedSheet, engine: engineSheet, confirm: confirmSheet, import: importSheet, classForm: classFormSheet, commitForm: commitFormSheet }[sh.type]();
     return `<div class="sheet-backdrop" data-action="backdrop"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
       <div class="sheet-grip" aria-hidden="true"></div><button class="icon-btn sheet-close" data-action="closeSheet" aria-label="Close">${ICON.close}</button>${inner}</div></div>`;
+  }
+
+  // ---------- Confirm (destructive actions only) ----------
+  /** One shared bottom sheet asks before anything is removed or erased. Cancel returns to where the student was. */
+  function confirmSheet() {
+    const sh = ui.sheet;
+    return `
+      <h2 id="sheet-title" tabindex="-1">${esc(sh.title)}</h2>
+      <p class="sheet-sub">${esc(sh.body)}</p>
+      <div class="sheet-actions confirm-actions">
+        <button class="btn" data-action="confirmNo">Cancel</button>
+        <button class="btn danger" data-action="confirmYes">${esc(sh.label)}</button>
+      </div>`;
+  }
+  function askConfirm(c) {
+    ui.sheet = Object.assign({ type: 'confirm', back: ui.sheet && ui.sheet.type !== 'confirm' ? ui.sheet : null }, c);
+    ui.dock = false;
+    render();
   }
 
   // ---------- Brain dump (capture + review) ----------
@@ -1511,9 +1759,9 @@
     const form = sh.input === 'form';
     const thread = ui.askThread.slice(-2);
     return `
-      <h2 id="sheet-title"><span class="title-icon">${ICON.braindump}</span>Ask SIKAD</h2>
-      <p class="sheet-sub">Ask about your plan, add a task, or say what changed. Nothing in your plan changes until you confirm it.</p>
-      ${thread.length ? `<div class="ask-thread" aria-label="Recent answers">${thread.map((e, i) => askEntry(e, i, thread.length - 1)).join('')}</div>` : ''}
+      <h2 id="sheet-title"><span class="title-icon">${form ? ICON.tasks : ICON.braindump}</span>${form ? 'Add a task' : 'Ask SIKAD'}</h2>
+      <p class="sheet-sub">${form ? 'Fill in what you know. SIKAD fits it into your plan, and you can undo it right after.' : 'Ask about your plan, add a task, or say what changed. Nothing in your plan changes until you confirm it.'}</p>
+      ${thread.length && !form ? `<div class="ask-thread" aria-label="Recent answers">${thread.map((e, i) => askEntry(e, i, thread.length - 1)).join('')}</div>` : ''}
       <div class="tabs" role="tablist" aria-label="Input method">
         <button role="tab" aria-selected="${!form}" class="${!form ? 'on' : ''}" data-action="dumpInput" data-v="text">Speak or type</button>
         <button role="tab" aria-selected="${form}" class="${form ? 'on' : ''}" data-action="dumpInput" data-v="form">Form</button>
@@ -1878,7 +2126,7 @@
     ui.sheet = null;
     S.replan(state, `Edited ${t.title}${changes.length ? ' (' + changes.join(', ') + ')' : ''}`);
     render();
-    planToast();
+    toast('Changes saved.', { undo: true });
   }
 
   // ---------- Fixed commitment ----------
@@ -1888,28 +2136,13 @@
     if (!o) return '<p>This commitment is no longer on the schedule.</p>';
     return `
       <h2 id="sheet-title" tabindex="-1">${ICON.lock}${esc(o.title)}</h2>
-      <p class="num"><b>${T.date(o.start)}</b><br>${T.range(o.start, o.end)}${o.mode ? ` · ${o.mode === 'FTF' ? 'Face-to-face' : 'Online'}` : ''}</p>
+      <p class="num"><b>${T.date(o.start)}</b><br>${T.range(o.start, o.end)}${o.mode ? ` · ${o.mode === 'FTF' ? FTF_LABEL : 'Online'}` : ''}</p>
       <p><span class="fixed-tag">${ICON.lock}Fixed · ${o.source === 'temporary' ? 'One-time' : 'Weekly'}</span></p>
       <div class="status-panel s-info">${ICON.info}<div><p>Fixed commitments are protected. SIKAD plans your tasks around them and never moves, shortens or skips them on its own. Only you can mark one as cancelled.</p></div></div>
       <div class="sheet-actions">
         ${o.source === 'temporary' ? `<button class="btn danger" data-action="cancelFixed">Remove this event</button>`
           : `<button class="btn" data-action="cancelFixed">It's cancelled on ${T.short(o.start)}</button>`}
       </div>`;
-  }
-
-  // ---------- Clock ----------
-  function clockSheet() {
-    const presets = [
-      ['Mon 6:00 AM', T.make(2026, 10, 12, 6, 0)], ['Mon 10:00 AM', T.make(2026, 10, 12, 10, 0)],
-      ['Mon 4:45 PM (the boss texts)', T.make(2026, 10, 12, 16, 45)], ['Tue 6:00 AM', T.make(2026, 10, 13, 6, 0)], ['Wed 10:00 AM', T.make(2026, 10, 14, 10, 0)],
-    ].filter(([, ms]) => ms > now());
-    return `
-      <h2 id="sheet-title" tabindex="-1">${ICON.clock}Clock</h2>
-      <p class="sheet-sub">SIKAD is stateless about time: everything is computed from this clock. Move it forward to walk through the week. Sessions that pass without "Done" become check-ins and get rescheduled.</p>
-      <label>Jump to<input type="datetime-local" id="clock-input" value="${T.toInput(now())}"></label>
-      <div class="row end"><button class="btn" data-action="setClock">Set time</button></div>
-      <div class="row end"><button class="btn small" data-action="loadDemoConfirm">Reset to Alex's week</button></div>
-      ${presets.length ? `<p class="small"><b>Story checkpoints</b></p><div class="chips">${presets.map(([l, ms]) => `<button class="chip-btn" data-action="jump" data-ms="${ms}">${esc(l)}</button>`).join('')}</div>` : ''}`;
   }
 
   // ---------- Engine output ----------
@@ -2033,11 +2266,11 @@
     loadDemo() {
       state = S.loadDemo(S.reset());
       ui.ob = freshOnboarding(); ui.tab = 'home'; undoSnap = null;
-      ui.sheet = null; ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.focusPick = null; ui.focusPartial = false; ui.prevPct = null; ui.error = null; ui.dock = false;
+      ui.sheet = null; ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.formDraft = null; ui.focusPick = null; ui.focusPartial = false; ui.prevPct = null; ui.error = null; ui.dock = false;
       render();
-      toast("Loaded Alex's week. Try Ask SIKAD, or move the clock in Judge tools.", { ms: 6000 });
+      toast("Loaded Alex's week, starting from today. Try Ask SIKAD.", { ms: 6000 });
     },
-    loadDemoConfirm() { if (confirm("Reset to Alex's week? This replaces all saved data with the sample scenario.")) A.loadDemo(); },
+    loadDemoConfirm() { askConfirm({ run: 'loadDemo', title: "Replace your data with Alex's week?", body: 'Your classes, tasks and plan on this device are replaced with the sample week. This cannot be undone.', label: 'Replace my data' }); },
     dockToggle() { ui.dock = !ui.dock; render(); },
     versionTap() {
       clearTimeout(versionTimer);
@@ -2048,11 +2281,43 @@
       render();
       toast(judge ? 'Judge tools are on.' : 'Judge tools are off.');
     },
-    resetAll() {
-      if (!confirm('Erase all data and restart setup?')) return;
-      state = S.reset(); ui.ob = freshOnboarding(); ui.sheet = null; undoSnap = null;
-      ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.focusPick = null; ui.prevPct = null; ui.error = null; render();
+    resetAll() { askConfirm({ run: 'resetAll', title: 'Erase everything and start over?', body: 'Your classes, tasks, plan and history are erased from this device, and setup starts again. This cannot be undone.', label: 'Erase everything' }); },
+    confirmYes() { const sh = ui.sheet; if (!sh || sh.type !== 'confirm') return; ui.sheet = sh.back; CONFIRMED[sh.run](sh); },
+    confirmNo() { if (!ui.sheet || ui.sheet.type !== 'confirm') return; ui.sheet = ui.sheet.back; render(); },
+    askMenu() {
+      ui.askMenu = !ui.askMenu; render();
+      const el = document.querySelector(ui.askMenu ? '.ask-opt' : '.fab');
+      if (el) el.focus({ preventScroll: true });
     },
+    askMenuClose() { if (ui.askMenu) A.askMenu(); },
+    askMode(ds) {
+      ui.askMenu = false;
+      const fab = document.querySelector('.fab');
+      if (fab) fab.focus({ preventScroll: true });          // closing the sheet later returns focus to Ask SIKAD
+      if (ds.v === 'form') A.newTask(); else A.openDump();
+    },
+  };
+  /** What runs after the student confirms in the confirm sheet. */
+  const CONFIRMED = {
+    removeClass(sh) { A.removeClass({ id: sh.id }); },
+    removeCommit(sh) { baselineChange(`Removed weekly ${sh.name}`, () => { state.baseline.recurring = state.baseline.recurring.filter((r) => !sh.ids.includes(r.id)); }, `Removed ${sh.name}. Plan recalculated.`); },
+    loadDemo() { A.loadDemo(); },
+    resetAll() {
+      state = S.reset(); ui.ob = freshOnboarding(); ui.sheet = null; undoSnap = null;
+      ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.formDraft = null; ui.focusPick = null; ui.prevPct = null; ui.error = null; render();
+      toast('Everything was erased. Setup starts fresh.');
+    },
+    deleteTask() {
+      const t = taskById(ui.sheet.id);
+      snapshot('Remove task');
+      t.status = 'cancelled';
+      ui.sheet = null;
+      S.replan(state, `Removed task: ${t.title}`);
+      render();
+      toast('Task removed.', { undo: true });
+    },
+  };
+  Object.assign(A, {
     toggleIntegration(ds) {
       const id = ds.id, info = D.INTEGRATIONS.find((i) => i.id === id);
       if (!info) return;
@@ -2101,7 +2366,7 @@
     },
 
     // --- navigation
-    tab(ds) { ui.tab = ds.tab; ui.focusOnly = false; render(); window.scrollTo(0, 0); },
+    tab(ds) { if (ui.tab === ds.tab && !ui.askMenu && !ui.sub) { window.scrollTo(0, 0); return; } ui.tab = ds.tab; ui.sub = null; ui.focusOnly = false; ui.askMenu = false; render(); window.scrollTo(0, 0); },
     dayView(ds) { ui.dayView = ds.v; render(); },
     pickDay(ds) { ui.weekDay = Number(ds.day); render(); },
     // data-v: -1 previous week, 1 next week, 0 back to this week. The arrows keep the same weekday selected.
@@ -2133,6 +2398,7 @@
       const log = state.engineLog;
       state = Object.assign(S.initialState(), JSON.parse(undoSnap.json));
       state.engineLog = log;
+      syncClock(true);                                     // the snapshot's clock may be a few minutes old
       state.lastUpdate = null;
       undoSnap = null; ui.toast = null;
       render();
@@ -2246,19 +2512,11 @@
     },
 
     // --- clock
-    openClock() { ui.dock = false; ui.sheet = { type: 'clock' }; render(); },
-    advance(ds) { moveClock(now() + Number(ds.mins) * T.MIN); },
-    nextMorning() { moveClock(T.at(T.dayStart(now()) + T.DAY, state.baseline.dayStart)); },
-    jump(ds) { ui.sheet = null; moveClock(Number(ds.ms)); },
-    setClock() {
-      const v = T.fromInput(document.getElementById('clock-input').value);
-      if (!v) return;
-      ui.sheet = null;
-      moveClock(v);
-    },
+    // The app follows the device clock; the old presenter clock actions now just re-read it.
+    openClock() { syncClock(); }, advance() { syncClock(); }, nextMorning() { syncClock(); }, jump() { syncClock(); }, setClock() { syncClock(); },
 
     // --- brain dump
-    openDump() { ui.sheet = { type: 'dump', mode: 'input', text: ui.dumpDraft || '', input: 'text', restored: !!ui.dumpDraft }; render(); setTimeout(() => { const el = document.getElementById('dump-text'); if (el) el.focus(); }, 60); },
+    openDump() { ui.sheet = { type: 'dump', mode: 'input', text: ui.dumpDraft || '', input: 'text', restored: !!ui.dumpDraft, form: ui.formDraft || null }; render(); setTimeout(() => { const el = document.getElementById('dump-text'); if (el) el.focus(); }, 60); },
     dumpInput(ds) { ui.sheet.input = ds.v; render(); },
     scenario(ds) { ui.dock = false; ui.sheet = { type: 'dump', mode: 'input', input: 'text', text: D.SCENARIOS[Number(ds.i)].text }; render(); },
     processDump() {
@@ -2316,10 +2574,10 @@
       const task = S.makeTask(state, { title: P.titleCase(f.title.trim()), type, deadline: f.deadline, durationMins: f.durationMins || est,
         isAiEstimate: !f.durationMins, priority: f.priority, notes: f.notes, parts: P.suggestParts(type, f.durationMins || est) });
       state.tasks.push(task);
-      ui.sheet = null;
+      ui.sheet = null; ui.formDraft = null;
       S.replan(state, `New task: ${task.title}`, { notes: task.deadline == null ? [`"${task.title}" needs a deadline before it can be scheduled.`] : [] });
       render();
-      planToast();
+      toast(task.deadline == null ? 'Task added. It needs a deadline before it can be scheduled.' : 'Task added.', { undo: true });
     },
     dictStart(ds) { dictStart(ds.path); },
     dictStop() { if (recog) { try { recog.stop(); } catch (e) { finishDictation(); } } },
@@ -2333,7 +2591,7 @@
 
     // --- tasks
     openTask(ds) { openTask(ds.id); },
-    newTask() { ui.sheet = { type: 'dump', mode: 'input', input: 'form', text: '' }; render(); },
+    newTask() { ui.sheet = { type: 'dump', mode: 'input', input: 'form', text: ui.dumpDraft || '', form: ui.formDraft || null }; render(); },
     saveTask() { saveTask(); },
     completeTask() {
       const t = taskById(ui.sheet.id);
@@ -2343,16 +2601,11 @@
       S.replan(state, `Completed: ${t.title}`);
       ui.celebrate = true;
       render();
-      planToast();
+      toast('Task marked done.', { undo: true });
     },
     deleteTask() {
       const t = taskById(ui.sheet.id);
-      snapshot('Remove task');
-      t.status = 'cancelled';
-      ui.sheet = null;
-      S.replan(state, `Removed task: ${t.title}`);
-      render();
-      planToast();
+      askConfirm({ run: 'deleteTask', title: 'Remove this task?', body: `"${t.title}" will be removed from your plan. You can undo this right after.`, label: 'Remove task' });
     },
 
     // --- fixed commitments & settings
@@ -2388,17 +2641,76 @@
       if (f.end <= f.start) { flagField(document.querySelector('#add-rec [name="end"]'), 'End time must be later than the start time.'); return; }
       baselineChange(`Added weekly ${f.title}`, () => S.addRecurring(state, { title: f.title.trim(), kind: f.kind, days: [Number(f.day)], start: f.start, end: f.end }));
     },
+
+    // --- Profile management views (weekly baseline)
+    profileOpen(ds) { ui.sub = SUBS.includes(ds.sub) ? ds.sub : null; render(); window.scrollTo(0, 0); focusHeading(); },
+    profileBack() { const from = ui.sub; ui.sub = null; render(); window.scrollTo(0, 0); const b = document.querySelector(`[data-action="profileOpen"][data-sub="${from}"]`); if (b) b.focus({ preventScroll: true }); },
+    accToggle(ds) { const d = Number(ds.d); ui.accOpen[d] = !ui.accOpen[d]; ui.accJust = ui.accOpen[d] ? d : null; render(); ui.accJust = null; },
+    formDay(ds) { const f = ui.sheet.form, d = Number(ds.d); f.days = f.days.includes(d) ? f.days.filter((x) => x !== d) : f.days.concat(d).sort((a, c) => dayRank(a) - dayRank(c)); ui.sheet.dayError = false; render(); },
+    formSet(ds) { ui.sheet.form[ds.k] = ds.v; render(); },
+    classAdd(ds) { ui.sheet = { type: 'classForm', groupIds: [], form: { title: '', days: ds.d != null ? [Number(ds.d)] : [], start: '08:00', end: '10:00', mode: 'FTF', room: '' } }; render(); },
+    classEdit(ds) {
+      const c = state.baseline.classes.find((x) => x.id === ds.id);
+      if (!c) return;
+      const same = state.baseline.classes.filter((x) => x.title === c.title && x.start === c.start && x.end === c.end && x.mode === c.mode && (x.room || '') === (c.room || ''));
+      ui.sheet = { type: 'classForm', groupIds: same.map((x) => x.id), form: { title: c.title, days: same.map((x) => x.day).sort((a, d) => dayRank(a) - dayRank(d)), start: c.start, end: c.end, mode: c.mode, room: c.room || '' } };
+      render();
+    },
+    classSave() {
+      const sh = ui.sheet, f = sh.form;
+      if (!baselineFormOk('Subject is missing. Type the class name or code, e.g. "IT 203".')) return;
+      const title = f.title.trim(), editing = sh.groupIds.length > 0, overlap = sh.conflicts.length > 0;
+      ui.sheet = null;
+      for (const d of f.days) ui.accOpen[d] = true;
+      baselineChange(`${editing ? 'Edited' : 'Added'} class ${title}`,
+        () => writeBaselineRows('classes', 'c', sh.groupIds, f.days, { title, start: f.start, end: f.end, mode: f.mode, room: f.room.trim() }),
+        `${editing ? 'Saved' : 'Added'} ${title}${overlap ? ' with an overlap to review' : ''}. Plan recalculated.`);
+      focusHeading();
+    },
+    classRemove(ds) {
+      const c = state.baseline.classes.find((x) => x.id === ds.id);
+      if (!c) return;
+      askConfirm({ run: 'removeClass', id: c.id, title: `Remove ${c.title} on ${T.DAY_NAMES[c.day]}?`, body: `This ${T.DAY_NAMES[c.day]} class is removed from every week and your plan is recalculated. Other days stay. You can undo this right after.`, label: 'Remove class' });
+    },
+    commitAdd(ds) { ui.sheet = { type: 'commitForm', groupIds: [], form: { title: '', cat: ds.kind || 'other', kind: null, days: [], start: '17:00', end: '19:00', notes: '', place: '' } }; render(); },
+    commitEdit(ds) {
+      const g = commitGroups().find((x) => x.ids.join(',') === ds.ids);
+      if (!g) return;
+      ui.sheet = { type: 'commitForm', groupIds: g.ids, form: { title: g.title, cat: g.cat, kind: g.kind, days: g.days.slice().sort((a, d) => dayRank(a) - dayRank(d)), start: g.start, end: g.end, notes: g.notes, place: g.place } };
+      render();
+    },
+    commitSave() {
+      const sh = ui.sheet, f = sh.form;
+      if (!baselineFormOk(COMMIT_FIELDS[f.cat].missing)) return;
+      const title = f.title.trim(), editing = sh.groupIds.length > 0, overlap = sh.conflicts.length > 0;
+      // "Other" keeps the kind an existing entry already had (e.g. one added through Ask SIKAD).
+      const kind = f.cat === 'other' ? (f.kind && f.kind !== 'work' && f.kind !== 'org' ? f.kind : 'event') : f.cat;
+      ui.sheet = null;
+      baselineChange(`${editing ? 'Edited' : 'Added'} weekly ${title}`,
+        () => writeBaselineRows('recurring', 'r', sh.groupIds, f.days, { title, kind, start: f.start, end: f.end, notes: f.notes.trim(), place: f.cat === 'work' ? f.place.trim() : '' }),
+        `${editing ? 'Saved' : 'Added'} ${title}${overlap ? ' with an overlap to review' : ''}. Plan recalculated.`);
+      focusHeading();
+    },
+    commitRemove(ds) {
+      const g = commitGroups().find((x) => x.ids.join(',') === ds.ids);
+      if (!g) return;
+      askConfirm({ run: 'removeCommit', ids: g.ids, name: g.title, title: `Remove ${g.title}?`, body: `It is removed from every week (${daySpan(g.days)}) and your plan is recalculated. You can undo this right after.`, label: 'Remove commitment' });
+    },
     openEngine() { ui.dock = false; ui.sheet = { type: 'engine' }; render(); },
 
     // --- sheet chrome
-    closeSheet() { stopVoice(); keepDraft(); ui.sheet = null; render(); },
+    closeSheet() { if (ui.sheet && ui.sheet.type === 'confirm') { A.confirmNo(); return; } stopVoice(); keepDraft(); ui.sheet = null; render(); },
     backdrop(ds, el, e) { if (e.target === el) A.closeSheet(); },
-  };
+  });
 
   /** Dismissing Ask SIKAD must not throw away what the student typed. */
   function keepDraft() {
     if (!ui.sheet) return;
-    if (ui.sheet.type === 'dump') ui.dumpDraft = (ui.sheet.text || '').trim() || null;
+    if (ui.sheet.type === 'dump') {
+      ui.dumpDraft = (ui.sheet.text || '').trim() || null;
+      const f = ui.sheet.form;
+      ui.formDraft = f && (f.title.trim() || (f.notes || '').trim() || f.deadline != null) ? f : null;
+    }
     if (ui.sheet.type === 'proposal') ui.dumpDraft = (ui.sheet.review.text || '').trim() || null;
   }
 
@@ -2435,13 +2747,40 @@
   /** Every replan offers Undo in one place: the toast. */
   const planToast = () => toast('Plan updated.', { undo: true });
 
-  function moveClock(ms) {
-    const hadCheckins = state.checkins.length;
-    S.setClock(state, ms);
-    undoSnap = null;
+  // ----------------------------------------------------------------- clock --
+  // state.now follows the device's local time: on load, at each new minute, and whenever the app
+  // comes back to the front. The data is always brought up to date; the screen waits until the
+  // student isn't mid-entry, so typing is never interrupted.
+  let clockDirty = false, clockTimer = 0;
+  const midEntry = () => {
+    const el = document.activeElement;
+    return !!(ui.sheet || ui.askMenu || pending || (el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) || document.querySelector('details.add[open]'));
+  };
+  function syncClock(quiet) {
+    const real = T.now();
+    if (real !== state.now) {
+      const newDay = T.dayStart(real) !== T.dayStart(state.now);
+      const hadCheckins = state.checkins.length;
+      // A running focus session is never ended by the clock; the student ends it.
+      if (!state.onboarded || state.active) state.now = real;
+      else S.setClock(state, real);
+      if (newDay) { ui.dayView = 'today'; ui.weekDay = null; ui.weekStart = null; }
+      if (newDay || state.checkins.length > hadCheckins) undoSnap = null;
+      clockDirty = true;
+      if (!quiet && state.checkins.length > hadCheckins) toast('A session ended without "Done". Check in on the Home tab.');
+    }
+    if (quiet || !clockDirty) return;
+    if (midEntry()) { S.save(state); return; }
+    clockDirty = false;
     render();
-    if (state.checkins.length > hadCheckins) toast('A session ended without "Done". Check in on the Home tab.');
   }
+  function scheduleClock() {
+    clearTimeout(clockTimer);
+    clockTimer = setTimeout(() => { syncClock(); scheduleClock(); }, clockDirty ? 3000 : 60000 - (Date.now() % 60000) + 40);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { syncClock(); scheduleClock(); } });
+  window.addEventListener('pageshow', () => { syncClock(); scheduleClock(); });
+  window.addEventListener('focus', () => { syncClock(); scheduleClock(); });
 
   // ----------------------------------------------------------------- voice --
   let recog = null;
@@ -2519,6 +2858,15 @@
     }
   });
 
+  document.addEventListener('click', (e) => {
+    document.querySelectorAll('.row-menu[open]').forEach((m) => { if (!m.contains(e.target)) m.open = false; });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const m = document.querySelector('.row-menu[open]');
+    if (m) { m.open = false; m.querySelector('summary').focus(); e.stopPropagation(); }
+  }, true);
+
   document.addEventListener('input', (e) => {
     const el = e.target;
     clearFieldError(el);
@@ -2565,6 +2913,7 @@
       }
     }
     if (e.key === 'Escape' && ui.sheet) A.closeSheet();
+    else if (e.key === 'Escape' && ui.askMenu) A.askMenuClose();
     else if (e.key === 'Escape' && document.body.classList.contains('spotlight')) A.spotlightOff();
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ui.sheet && ui.sheet.type === 'dump' && ui.sheet.mode === 'input') A.processDump();
   });
@@ -2583,7 +2932,9 @@
   if (state.loadNotice) { const msg = state.loadNotice; delete state.loadNotice; setTimeout(() => toast(msg, { ms: 7000 }), 300); }
 
   // Deep link: open the tab named in the URL (e.g. index.html#tasks).
-  if (state.onboarded && TABS.includes(location.hash.slice(1))) ui.tab = location.hash.slice(1);
+  if (state.onboarded && TABS.includes(location.hash.slice(1).split('/')[0])) readRoute();
 
+  syncClock(true);   // a plan saved earlier is brought up to the real current time before first paint
   render();
+  scheduleClock();
 })();

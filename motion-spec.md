@@ -27,13 +27,21 @@
 | `--ease-out` | `cubic-bezier(.2,.7,.2,1)` | design.md | Everything that enters |
 | `--ease-in` | `ease-in` | design.md | Everything that leaves |
 | `--ease-snap` | `cubic-bezier(.3,1.25,.5,1)` | **added** | The Shuffle: small overshoot, then settle |
-| `--ease-spring` | `cubic-bezier(.34,1.4,.64,1)` | **added** | Focus Card spring |
+| `--ease-spring` | `cubic-bezier(.34,1.4,.64,1)` | **added** | Focus Card spring; toast entrance; active nav icon settle. Success feedback only, never on exits |
 
 **Deviations from design.md.** design.md names three durations (120 / 200 / 1,200 ms) and asks for a "smooth spring" and cards that "slide and snap", without timing them. A 200 ms slide across several rows reads as a jump, so travel gets its own 360 ms token and the spring 420 ms. No design.md value is changed.
 
 ## 3. Technology
 
-**Native CSS transitions/keyframes plus the Web Animations API. GSAP was evaluated and not added.**
+**Native CSS transitions/keyframes plus the Web Animations API. GSAP, anime.js and Animate.css were evaluated (prompt 8) and not added.**
+
+| Tool | Decision | Reason |
+|---|---|---|
+| CSS transitions / keyframes | **Kept** | Nav pill, Ask menu, sheets, toasts, press states. State lives in classes, so interruption is free. |
+| Web Animations API (`js/motion.js`) | **Kept** | The Shuffle (FLIP), strike, Focus Card spring. One `cancelAll()` per render. |
+| GSAP | Rejected | CLAUDE.md forbids libraries. Its timelines persist across frames, but every render here discards its elements. ~70 KB vendored for sequences that are two steps long. |
+| anime.js | Rejected | Same rule. Stagger and spring are covered by `animation-delay` and `--ease-spring`. |
+| Animate.css | Rejected | Same rule. Its presets (bounce, flip, zoom) are louder than "Calm Momentum" and ignore our tokens. |
 
 - The Shuffle is a FLIP: measure, re-render, measure, play the difference as a transform. `Element.animate()` does this in about 150 lines.
 - The app rebuilds its HTML on every render. Animations therefore live for one render and are discarded with their elements. GSAP's timelines and persistent tweens solve a problem this architecture does not have.
@@ -95,6 +103,25 @@ Completing from the task sheet or a check-in card has no title to strike on scre
 | **End** | Any outcome ends the session through the existing store calls; the card collapses with the same spring and the scrim fades out. |
 | **Timer** | Unchanged: real elapsed time in the store. It survives refresh, tab changes and spotlight exit. |
 | **Reduced motion** | The card and scrim change instantly. |
+
+### 5.5 Feedback: toast, confirm sheet, Undo
+
+| Interaction | Trigger | Motion | Leaves | Interrupt / cleanup |
+|---|---|---|---|---|
+| Toast | Any saved action | Rises 12 px + fades in, 240 ms `--ease-spring`. Sits above the nav pill and the safe area. | Sinks 8 px + fades, 120 ms `--ease-in` | One toast node at a time; a new message replaces it. Stays ≥ 5.2 s, longer while hovered or focused. Hidden while a sheet or the Ask menu is open. |
+| Confirm sheet | Remove task, erase data, load sample week | Same sheet rise as every sheet (200 ms). When it replaces an open sheet the content swaps with no second rise. | Sheet sink, 160 ms | Cancel, ✕, backdrop and Escape all return to the previous sheet with nothing changed. |
+| Undo | Toast button | No motion of its own: the restored plan plays the Shuffle back. | — | Restores the single snapshot taken before the action, then re-reads the clock. One Undo surface (the toast). |
+
+### 5.6 Nav pill and Ask SIKAD menu
+
+| Interaction | Trigger | Motion | Leaves | Interrupt / cleanup |
+|---|---|---|---|---|
+| Active nav item (< 768 px) | Tap a destination | Label track opens `0fr → 1fr` + 6 px gap, 360 ms `--ease-out`; label fades in 200 ms; tint and colour 200 ms; icon settles to `scale(1.06)` with `--ease-spring`. The previous item collapses on the same clock. Only the fixed pill lays out; the page never moves. | — | Render rebuilds the nav in its previous state with transitions off, then releases it. A second tap mid-transition starts again from the last committed tab. Tapping the current tab only scrolls to top. |
+| Ask menu open | Tap Ask SIKAD | Scrim fades 200 ms. Panel scales `.94 → 1` and rises 8 px from the Ask button's centre (`--ask-x`), 200 ms `--ease-out`. The two options rise 6 px, staggered 40 ms. Icon swaps to ✕ with a 200 ms scale-in. | Panel `scale(.96)` + fade, scrim fade, 160 ms `--ease-in` | Leaving nodes are inert and removed on `animationend` (timeout fallback). Choosing a mode skips the exit: the sheet rise takes over. |
+| Ask menu, ≥ 768 px | Same | Opens in place under the rail button; same fade/scale, no dimming scrim. | Same | Same |
+| Mode switch inside the sheet | "Speak or type" / "Form" tabs | Press feedback, then content swap. Title changes ("Ask SIKAD" / "Add a task"). | — | Both drafts are kept in memory until sent, saved or erased. |
+
+Reduced motion: the pill and menu change state instantly; scrim, tint, label and ✕ still show the state.
 
 ### 5.4 Other interactions
 

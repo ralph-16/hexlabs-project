@@ -9,6 +9,11 @@ const path = require('path');
 for (const f of ['time', 'data', 'parser', 'engine', 'store', 'focus', 'assistant']) require(path.join(__dirname, '..', 'js', f + '.js'));
 const { TempoTime: T, TempoData: D, TempoParser: P, TempoEngine: E, TempoStore: S, TempoFocus: F, TempoAssistant: A } = globalThis;
 
+// The app reads the device clock (T.now). Tests pin it to one Sunday evening so results are repeatable.
+const realNow = T.now;
+const FIXED_NOW = T.make(2026, 10, 11, 21, 30);
+T.now = () => FIXED_NOW;
+
 let passed = 0, failed = 0;
 const test = (name, fn) => { try { fn(); passed++; console.log('  ok   ' + name); } catch (e) { failed++; console.log('  FAIL ' + name + '\n       ' + e.message); } };
 const ok = (cond, msg) => { if (!cond) throw new Error(msg || 'assertion failed'); };
@@ -254,6 +259,28 @@ test('18. Alex\'s previous week has finished work and one planned block that was
   ok(st.tasks.some((x) => x.title === 'Algorithm Tracing Worksheet' && x.status !== 'done'), 'and that task is still open');
   ok(days.reduce((a, d) => a + d.doneMins, 0) < days.reduce((a, d) => a + d.plannedMins, 0), 'done is less than planned');
   eq(S.daySummary(st, '2026-09-30').blocks.length, 0, 'an empty day is just empty');
+});
+
+console.log('\nReal clock');
+test('19. "now" is the device clock, to the minute, in local wall time', () => {
+  const real = Date.now(), n = realNow();
+  eq(n % T.MIN, 0, 'whole minutes');
+  ok(Math.abs(n - (real - new Date(real).getTimezoneOffset() * T.MIN)) <= T.MIN, 'matches the device local time');
+  eq(T.parts(n).h, new Date(real).getHours(), 'same local hour as the device');
+});
+test('20. the sample week is built from today, on any date (mid-week, year end, late night)', () => {
+  for (const when of [T.make(2026, 12, 30, 9, 0), T.make(2027, 1, 1, 14, 0), T.make(2027, 3, 6, 23, 50), T.make(2028, 2, 29, 7, 15)]) {
+    T.now = () => when;
+    const st = demo();
+    eq(st.now, when, 'the plan starts from the current time');
+    ok(st.plan.length >= 3 && st.plan.every((s) => s.start >= when), 'every planned session is in the future');
+    const open = st.tasks.filter((t) => t.status !== 'done');
+    eq(open.filter((t) => t.deadline < when).map((t) => t.title), ['Algorithm Tracing Worksheet'], 'only the carried-over task is overdue');
+    ok(open.every((t) => Math.abs(t.deadline - when) < 21 * T.DAY), 'deadlines sit near today, not on a fixed calendar date');
+    ok(Object.keys(st.daySnapshots).every((k) => k <= T.key(when)) && st.history.every((h) => h.end < when), "last week's records are in the past");
+    eq(T.dow(Math.min(...st.history.map((h) => h.start))), 1, "last week's work starts on a Monday");
+  }
+  T.now = () => FIXED_NOW;
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

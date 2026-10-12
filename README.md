@@ -12,7 +12,7 @@ SIKAD is a working, clickable prototype of the product in [user_story.md](prompt
 2. Home shows the **Focus Card** ("What to do next" with *Why this?*), **This week** progress, "Does it all fit?", and the timeline.
 3. Open **Ask SIKAD** (centre button). Tap *How much usable time do I have tomorrow?* and *Can I realistically finish everything before Friday?* The answers are computed from the current plan.
 4. In Ask SIKAD, say or type **"I have a work shift tomorrow from 6 PM to 10 PM."** Review the interpreted commitment → *See plan changes* → the proposal lists what would move → **Accept changes** (or Reject: nothing changes).
-5. Demo clock (top bar) → **Mon 10:00 AM**. Tap **Start task**. The Focus Card expands, the rest of the screen dims, and SIKAD suggests a working method and says why. Pick one → *Start session* → Pause / Resume → *Stop early* → answer **Partly done** and enter what is left. The plan and **This week** update. Tap the dimmed area (or *Show my plan*) to leave the spotlight without stopping the timer.
+5. Tap **Start task**. The Focus Card expands, the rest of the screen dims, and SIKAD suggests a working method and says why. Pick one → *Start session* → Pause / Resume → *Stop early* → answer **Partly done** and enter what is left. The plan and **This week** update. Tap the dimmed area (or *Show my plan*) to leave the spotlight without stopping the timer.
 6. Tap **Snooze** on the Focus Card for a one-tap replan: the timeline cards slide to their new slots. Tap **Done** to see the title struck through before the next task appears.
 7. Try the other demo scenarios in Ask SIKAD: a clash with a class, a missing deadline, a task that depends on another, "write my essay", "I need another hour".
 8. **Profile → View engine output** shows the JSON for every request. **Profile → Reset demo to the initial scenario** restores Alex's week so the demo can be repeated.
@@ -80,7 +80,7 @@ A daily streak rewards showing up every day. Student schedules are uneven (exam 
 - **Schedule import** loads sample text; no OCR runs.
 - **Platform connections** (Google Calendar, Canvas, Teams, Classroom) are toggles only.
 - **Voice** uses the browser's own speech recognition (Chrome and Edge; it needs an internet connection). Other browsers get a typed alternative and a sample transcript labelled as demo. SIKAD stores no audio.
-- **Time** comes from a demo clock so the week can be stepped through.
+- **Time** is the device's real local date, time and timezone (`T.now()` in `js/time.js`). Nothing simulates the clock; the sample week is generated relative to today. Only the automated tests pin the clock.
 
 ## Testing
 
@@ -118,8 +118,8 @@ The final implementation brief (`prompts/prompt-5/`) extends the original user s
 ## Known limitations
 
 - Ask SIKAD recognises a fixed set of question and statement patterns. Anything else gets a clarifying question.
-- A focus session that is still running when the demo clock is moved past its end is dropped without being counted.
-- The session timer uses real time; the plan uses the demo clock. Use "Skip ahead 5 min" (labelled DEMO) to move a session forward.
+- A running focus session is never ended by the clock; it stays open until the student ends it.
+- The session timer and the plan both use real time. "Skip session ahead 5 min" in the judge dock moves only the session timer.
 - During the 4-step setup the browser Back button leaves the page; use the on-screen Back button.
 - Data is saved in `localStorage` on this device only. Use **Profile → Reset** to start over.
 - To use a real model later: call it with `prompts/prompt-1/prompt.md` as the system prompt from inside `TempoParser.parse`, and keep `engine.js` as the deterministic validator described in prompt.md §2.

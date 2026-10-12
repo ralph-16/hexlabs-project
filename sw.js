@@ -2,7 +2,7 @@
  * SIKAD — offline app shell. Network first, so a new deploy always wins when online;
  * the cached copy is only used when the network is unavailable.
  */
-const CACHE = 'sikad-shell-v1';
+const CACHE = 'sikad-shell-v2';
 const SHELL = ['./', 'index.html', 'css/styles.css', 'manifest.webmanifest', 'icons/sikad.svg',
   'js/time.js', 'js/data.js', 'js/parser.js', 'js/engine.js', 'js/store.js', 'js/focus.js', 'js/assistant.js', 'js/motion.js', 'js/app.js'];
 
