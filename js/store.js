@@ -50,23 +50,31 @@
     return st;
   }
 
+  const UNREADABLE = 'Saved data on this device could not be read (it was damaged or from an older version), so SIKAD started fresh. The old plan cannot be restored in the app.';
   function load() {
+    let raw = null;
     try {
-      const raw = localStorage.getItem(KEY);
+      raw = localStorage.getItem(KEY);
       if (raw) {
         const st = sanitize(JSON.parse(raw));
         if (st) return st;
-        const fresh = initialState(); fresh.loadNotice = 'Saved data could not be read, so SIKAD started fresh.';
-        return fresh;
       }
-    } catch (e) {
-      const fresh = initialState(); fresh.loadNotice = 'Saved data could not be read, so SIKAD started fresh.';
+    } catch (e) { /* unreadable storage or damaged JSON: handled below */ }
+    if (raw) {
+      // Keep the unreadable copy aside instead of silently writing over it, and say what happened.
+      try { localStorage.setItem(KEY + ':unreadable', raw); } catch (e) { /* no room: nothing more can be done */ }
+      const fresh = initialState(); fresh.loadNotice = UNREADABLE;
       return fresh;
     }
     return initialState();
   }
+  /** → true when the state was written. false means the browser refused (storage full, blocked, private window). */
   function save(state) {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(KEY, JSON.stringify(state)); return true; } catch (e) { return false; }
+  }
+  /** Can this browser store anything at all? Checked once at start so the app can say so up front. */
+  function storageAvailable() {
+    try { const k = KEY + ':probe'; localStorage.setItem(k, '1'); localStorage.removeItem(k); return true; } catch (e) { return false; }
   }
   function reset() {
     try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
@@ -89,6 +97,7 @@
     return t.parts && t.parts.length ? t.parts.reduce((a, p) => a + p.mins, 0) : t.durationMins;
   }
 
+  const DIFFICULTIES = ['easy', 'medium', 'hard'];   // 'medium' is the default when the student has not said
   function makeTask(state, t) {
     const parts = (t.parts || []).filter((p) => p.mins > 0).map((p, i) => ({
       id: `p${i + 1}`, title: p.title, mins: p.mins, remainingMins: p.mins, done: false, aiSuggested: !!p.aiSuggested,
@@ -97,7 +106,7 @@
       id: uid(state, 't'), title: t.title, type: t.type || 'task', context: t.context || null,
       deadline: t.deadline != null ? t.deadline : null, durationMins: t.durationMins,
       remainingMins: parts.length ? 0 : t.durationMins, isAiEstimate: !!t.isAiEstimate,
-      priority: t.priority || 'medium', doFirst: false, status: 'pending', parts,
+      priority: t.priority || 'medium', difficulty: DIFFICULTIES.includes(t.difficulty) ? t.difficulty : 'medium', doFirst: false, status: 'pending', parts,
       dependencies: t.dependencies || [], notBefore: null, pinnedStart: null, notes: t.notes || '', createdAt: state.now,
     };
   }
@@ -137,6 +146,10 @@
     state.needsDeadline = res.needsDeadline;
     state.alerts = res.alerts;
     state.status = res.status;
+    state.late = res.late || [];
+    // An agreed-late task that now fits before its deadline is simply on time again.
+    for (const t of state.tasks) if (t.lateOk && !state.late.some((l) => l.taskId === t.id) && !res.unscheduled.some((x) => x.unit.taskId === t.id)) t.lateOk = false;
+    for (const a of res.alerts) if (a.code === 'PIN_FAILED') { const t = state.tasks.find((x) => x.id === a.taskId); if (t) t.pinnedStart = null; }
     if (state.active && !state.plan.some((s) => s.id === state.active.sessionId)) state.active = null;
 
     const next = E.nextSession(res.plan, state.now);
@@ -239,6 +252,12 @@
   }
 
   // -------------------------------------------------------------- actions --
+  const OVERRUN_GRACE = 30 * MIN;
+  /** The student just reported on work that was happening now (not an old check-in): the engine starts the next task a buffer later. */
+  function markBusy(state, s) {
+    const live = (state.active && state.active.sessionId === s.id) || (state.now >= s.start && state.now <= s.end + OVERRUN_GRACE);
+    if (live) state.busyUntil = state.now;
+  }
   function findSession(state, id) {
     return state.plan.find((s) => s.id === id) || state.checkins.find((s) => s.id === id) || null;
   }
@@ -325,6 +344,7 @@
     if (!a) return null;
     const s = findSession(state, a.sessionId);
     if (!s) { state.active = null; return null; }
+    markBusy(state, s);
     state.focusLog.push({ id: `f_${String(state.focusLog.length + 1).padStart(3, '0')}`, taskId: s.taskId, title: s.title, method: a.method, at: state.now,
       focusedMins: Math.max(0, Math.round(focusedMins || 0)), outcome });
     if (outcome === 'complete') return completeSession(state, s.id);
@@ -382,6 +402,147 @@
     return task;
   }
 
+  // ------------------------------------------------ too much work: adjust --
+  /**
+   * When work does not fit before its deadlines, work out a plan that DOES run, for the student to
+   * accept or reject. Nothing is shortened, no deadline is edited and no fixed commitment moves:
+   * the only thing offered is to let the least important competing work finish after its deadline.
+   *
+   * Which tasks give way (ADJUST_ORDER): lowest priority first, then not marked "do first", then the
+   * one that already did not fit, then the later deadline, then the larger task. One task at a time
+   * until everything has a slot; then each choice is re-tested and dropped if it was not needed.
+   *
+   * opts.basePlan: the plan to list changes against (default: this state's). opts.because: what led here.
+   * Works on a COPY. → null when nothing is unscheduled for lack of time, else
+   *   { draft, late: [{ taskId, title, deadline, finish, lateMins, mins, priority }], stillUnfit: [{ title, mins }] }
+   */
+  function suggestAdjustment(state, opts = {}) {
+    const stuckIn = (st) => (st.unscheduled || []).filter((u) => u.reason === 'no_time');
+    if (!stuckIn(state).length) return null;
+    const draft = clone(state);
+    const run = () => {
+      const res = E.schedule(draft, { prevPlan: draft.plan.filter((s) => s.end > draft.now) });
+      draft.plan = res.plan;
+      draft.unscheduled = res.unscheduled.map((x) => ({ unitId: x.unit.id, taskId: x.unit.taskId, title: x.unit.title, mins: x.unit.mins, deadline: x.unit.deadline, reason: x.reason, waitingOn: x.waitingOn || null }));
+      return res;
+    };
+    const PRI = { low: 0, medium: 1, high: 2 };
+    const chosen = [];
+    for (let guard = 0; guard < draft.tasks.length + 1 && stuckIn(draft).length; guard++) {
+      const stuck = stuckIn(draft), stuckIds = new Set(stuck.map((u) => u.taskId));
+      const horizon = Math.max(...stuck.map((u) => u.deadline));
+      // Everything that competes for the time before the last missed deadline.
+      const competing = draft.tasks.filter((t) => t.status !== 'done' && t.status !== 'cancelled' && !t.lateOk && t.deadline != null && t.deadline > draft.now &&
+        (stuckIds.has(t.id) || draft.plan.some((s) => s.taskId === t.id && s.start < horizon)));
+      if (!competing.length) break;
+      competing.sort((a, b) => PRI[a.priority] - PRI[b.priority] || (a.doFirst ? 1 : 0) - (b.doFirst ? 1 : 0) || (stuckIds.has(b.id) ? 1 : 0) - (stuckIds.has(a.id) ? 1 : 0) ||
+        b.deadline - a.deadline || taskRemaining(b) - taskRemaining(a) || a.id.localeCompare(b.id));
+      competing[0].lateOk = true; chosen.push(competing[0]);
+      run();
+    }
+    // Keep only the choices that were really needed, giving the most important work the first chance to stay on time.
+    for (const t of chosen.slice().reverse().sort((a, b) => PRI[b.priority] - PRI[a.priority])) {
+      if (chosen.length === 1) break;
+      t.lateOk = false;
+      run();
+      if (stuckIn(draft).length) { t.lateOk = true; run(); } else chosen.splice(chosen.indexOf(t), 1);
+    }
+    draft.plan = (opts.basePlan || state.plan).map((s) => Object.assign({}, s));   // so the change list compares with the real plan
+    const r = replan(draft, `${opts.because ? opts.because + ' · ' : ''}Adjusted plan: ${chosen.length} task${chosen.length === 1 ? '' : 's'} would finish late`, {
+      notes: ['Nothing was shortened, no deadline was edited and no fixed commitment moved.'] });
+    const late = (draft.late || []).map((l) => { const t = draft.tasks.find((x) => x.id === l.taskId); return Object.assign({}, l, { mins: taskRemaining(t), priority: t.priority }); });
+    return { draft, late, stillUnfit: stuckIn(draft).map((u) => ({ title: u.title, mins: u.mins })), changes: r ? r.changes : [] };
+  }
+
+  // -------------------------------------------------------- task actions --
+  /**
+   * One edit to one saved task, as asked for in Ask SIKAD (or any other caller). It changes the task
+   * only: the caller replans, so every time and move still comes from the engine. Nothing is
+   * changed when the action is not valid. → { ok: true, trigger } | { ok: false, error }
+   */
+  function applyTaskAction(state, a) {
+    const task = state.tasks.find((t) => t.id === a.taskId);
+    if (!task || task.status === 'cancelled') return { ok: false, error: 'That task is no longer on your list.' };
+    if (task.status === 'done') return { ok: false, error: `"${task.title}" is already done.` };
+    const title = task.title;
+    switch (a.type) {
+      case 'move': {
+        const clearHolds = () => { task.notBefore = null; (task.parts || []).forEach((p) => { p.notBefore = null; }); };
+        if (a.start != null) {
+          if (!isFinite(a.start) || a.start <= state.now) return { ok: false, error: 'That time has already passed.' };
+          clearHolds(); task.pinnedStart = a.start;
+          return { ok: true, trigger: `Move ${title} to ${T.short(a.start)} ${T.time(a.start)}` };
+        }
+        if (a.day != null) {
+          if (T.dayStart(a.day) < T.dayStart(state.now)) return { ok: false, error: 'That day has already passed.' };
+          clearHolds(); task.pinnedStart = null; task.notBefore = Math.max(state.now, T.at(T.dayStart(a.day), state.baseline.dayStart));
+          return { ok: true, trigger: `Move ${title} to ${T.short(a.day)}` };
+        }
+        clearHolds(); task.pinnedStart = null;
+        return { ok: true, trigger: `Find the next open slot for ${title}` };
+      }
+      case 'set_duration': {
+        const mins = Math.round(Number(a.mins));
+        if (!isFinite(mins) || mins < 5 || mins > 40 * 60) return { ok: false, error: 'Time needed must be between 5 minutes and 40 hours.' };
+        setDuration(task, mins);
+        return { ok: true, trigger: `Time needed for ${title} → ${T.dur(mins)}` };
+      }
+      case 'rename': {
+        const name = String(a.newTitle || '').trim();
+        if (name.length < 2) return { ok: false, error: 'A task needs a name.' };
+        task.title = name;
+        for (const s of state.plan) if (s.taskId === task.id) s.title = s.partId ? `${name} — ${(task.parts.find((p) => p.id === s.partId) || {}).title || ''}` : name;
+        return { ok: true, trigger: `Renamed ${title} → ${name}` };
+      }
+      case 'set_difficulty':
+        if (!DIFFICULTIES.includes(a.difficulty)) return { ok: false, error: 'Difficulty is easy, medium or hard.' };
+        task.difficulty = a.difficulty;
+        return { ok: true, trigger: `Difficulty of ${title} → ${a.difficulty}` };
+      case 'set_priority':
+        if (!['high', 'medium', 'low'].includes(a.priority)) return { ok: false, error: 'Priority is high, medium or low.' };
+        task.priority = a.priority;
+        return { ok: true, trigger: `Priority of ${title} → ${a.priority}` };
+      case 'deadline_change':
+        if (a.deadline == null || !isFinite(a.deadline)) return { ok: false, error: 'That deadline is not a date I can use.' };
+        task.deadline = a.deadline; task.lateOk = false;
+        return { ok: true, trigger: `Deadline for ${title} → ${T.short(a.deadline)}` };
+      case 'cancel_task':
+        task.status = 'cancelled';
+        if (state.active && (findSession(state, state.active.sessionId) || {}).taskId === task.id) state.active = null;
+        state.checkins = state.checkins.filter((c) => c.taskId !== task.id);
+        return { ok: true, trigger: `Removed task: ${title}` };
+      default: return { ok: false, error: 'That change is not supported.' };
+    }
+  }
+
+  /**
+   * Apply one parsed Ask SIKAD intent that targets an existing task. Shared by the review → proposal
+   * flow and by "what if" previews (which run it on a copy). → { ok, trigger?, error? }
+   */
+  function applyIntent(state, it) {
+    const task = state.tasks.find((t) => t.id === it.taskId);
+    if (!task) return { ok: false, error: 'That task is no longer on your list.' };
+    switch (it.type) {
+      case 'complete':
+        if (task.status === 'done') return { ok: false, error: `"${task.title}" is already done.` };
+        completeTask(state, task.id); return { ok: true, trigger: `Completed: ${task.title}` };
+      case 'extend': extendTask(state, task.id, it.addMins); return { ok: true, trigger: `More time for ${task.title} (+${T.dur(it.addMins)})` };
+      case 'partial':
+        if (it.remainingMins == null || !isFinite(it.remainingMins) || it.remainingMins <= 0) return { ok: false, error: 'How much time is still needed?' };
+        setTaskRemaining(state, task.id, it.remainingMins); task.pinnedStart = null;
+        return { ok: true, trigger: `Partly done: ${task.title} (${T.dur(taskRemaining(task))} left)` };
+      default: return applyTaskAction(state, it);
+    }
+  }
+  /** Run intents on a COPY and replan it. The given state is never touched. → { draft, applied, errors } */
+  function previewIntents(state, intents) {
+    const draft = clone(state);
+    const applied = [], errors = [];
+    for (const it of intents) { const r = applyIntent(draft, it); if (r.ok) applied.push(r.trigger); else errors.push(r.error); }
+    if (applied.length) replan(draft, applied.join(' · '));
+    return { draft, applied, errors };
+  }
+
   // ------------------------------------------------------ weekly progress --
   /**
    * Weekly progress (Mon–Sun, from the current clock):
@@ -409,6 +570,7 @@
     if (!s) return null;
     const now = state.now;
     const early = now < s.start;
+    markBusy(state, s);
     state.history.push({ id: s.id + '@' + now, taskId: s.taskId, title: s.title,
       start: early ? now : s.start, end: early ? now : Math.min(Math.max(now, s.start + 15 * MIN), s.end), doneAt: now });
     const task = creditWork(state, s);
@@ -504,7 +666,7 @@
 
   function parseContext(state) {
     return {
-      now: state.now, tasks: state.tasks, dayStartHm: state.baseline.dayStart,
+      now: state.now, tasks: state.tasks, plan: state.plan, dayStartHm: state.baseline.dayStart,
       occurrencesFor: (day) => E.occurrences(state, day),
       // "this task" = the one being worked on, else the next one recommended
       currentTaskId: (state.active && (findSession(state, state.active.sessionId) || {}).taskId) || (E.nextSession(state.plan, state.now) || {}).taskId || null,
@@ -535,7 +697,7 @@
     KEY, clone, initialState, load, save, reset, uid, log, taskRemaining, taskTotal, makeTask, setDuration,
     replan, findSession, startSession, pauseSession, resumeSession, skipSession, focusElapsedMs, endFocus,
     completeSession, snoozeSession, dismissCheckin, setClock,
-    extendTask, completePart, completeTask, setTaskRemaining, weeklyProgress, sanitize, daySummary,
+    extendTask, completePart, completeTask, setTaskRemaining, KEY, applyTaskAction, applyIntent, previewIntents, suggestAdjustment, storageAvailable, DIFFICULTIES, weeklyProgress, sanitize, daySummary,
     addEvent, addRecurring, cancelOccurrence, classesFromPhase1, applyLifestyle, parseContext, loadDemo,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

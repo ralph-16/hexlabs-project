@@ -230,6 +230,8 @@ label > input, label > select, label > textarea, label > .hrs-input { margin-top
 .est-dur { text-decoration: underline dashed var(--estimate); text-underline-offset: 3px; }
 .chip.now, .chip.live { background: var(--butter); color: var(--on-butter); }
 .chip.moved { background: var(--warn-tint); color: var(--ink); }
+.chip.risk { background: var(--warn-tint); color: var(--warn); }
+.chip.risk.high { background: var(--critical-tint); color: var(--critical); }
 .chip.status-SUCCESS { background: var(--success-tint); color: var(--success); }
 .chip.status-CLARIFICATION_NEEDED { background: var(--warn-tint); color: var(--warn); }
 .chip.status-CONFLICT { background: var(--conflict-tint); color: var(--conflict); }
@@ -950,6 +952,18 @@ main:focus { outline: none; }
 .metrics li:last-child { padding-bottom: 0; }
 .metrics svg { flex: none; width: 20px; height: 20px; margin-top: 2px; color: var(--forest); }
 #schedule { scroll-margin-top: 16px; }
+/* Completion confidence: only tasks that are at risk today are listed (engine.js CONFIDENCE). */
+.risk-list { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.risk-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.risk-list li > div { min-width: 0; overflow-wrap: anywhere; }
+.risk-list b { font-size: 14px; line-height: 20px; }
+.risk-list p { margin: 4px 0 0; color: var(--ink-2); }
+.risk-list .btn { flex: none; }
+.risk-note { margin: 6px 0 0; }
+.late-list { list-style: none; margin: 8px 0; padding: 0; }
+.late-list li { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.late-list li:first-child { border-top: 0; }
+.infeasible > .row { align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 10px 0 4px; }
 @keyframes winPop { 0% { transform: scale(1); } 40% { transform: scale(1.18); } 100% { transform: scale(1); } }
 .session-log summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--forest); min-height: var(--target); display: flex; align-items: center; gap: 6px; list-style: none; }
 .session-log summary::-webkit-details-marker { display: none; }
@@ -1028,8 +1042,10 @@ body.spotlight .focus { z-index: 36; }
 .offline-banner svg { width: 16px; height: 16px; margin-top: 1px; color: var(--info); }
 
 /* ---------- judge tools dock (presenter only: ?demo=1) ---------- */
-.judge-dock { position: fixed; z-index: 40; left: 16px; bottom: calc(144px + env(safe-area-inset-bottom)); display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 8px; }
-.judge-dock.in-setup { top: calc(8px + env(safe-area-inset-top)); bottom: auto; flex-direction: column; }
+.judge-dock { position: fixed; z-index: 40; right: 16px; bottom: calc(144px + env(safe-area-inset-bottom)); display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 8px; }
+.jd-clock { margin: 0 0 6px; font-size: 14px; line-height: 20px; }
+.jd-input { flex: 1 1 170px; min-width: 0; min-height: var(--target); padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--ink); font: inherit; font-size: 16px; }
+.judge-dock.in-setup { top: calc(8px + env(safe-area-inset-top)); bottom: auto; right: auto; left: 16px; align-items: flex-start; flex-direction: column; }
 .judge-pill {
   display: inline-flex; align-items: center; gap: 6px; min-height: var(--target); padding: 6px 14px; border-radius: var(--radius-pill);
   border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow-2);

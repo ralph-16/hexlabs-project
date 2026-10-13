@@ -47,6 +47,33 @@
   // Priority is a ranking, not a status: neutral chip + bar glyph (design.md §5.4).
   const PRI_BARS = { high: 3, medium: 2, low: 1 };
   const priChip = (p) => `<span class="chip pri" aria-label="${PRI_LABEL[p] || p} priority"><span class="pri-bars" aria-hidden="true">${[1, 2, 3].map((i) => `<i class="${i <= (PRI_BARS[p] || 0) ? '' : 'off'}"></i>`).join('')}</span>${PRI_LABEL[p] || p}</span>`;
+  const DIFF_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
+  /** "At risk" chip. The percentage is the rule-based estimate from E.completionConfidence, shown only when a task is at risk. */
+  const riskChip = (r) => `<span class="chip risk ${r.level === 'risk' ? '' : 'high'}" title="Estimate from today's plan, not a prediction. ${esc(r.reason)}">${r.percent != null ? `At risk · ${r.percent}%` : esc(r.label)}</span>`;
+  /** "about 3 hrs" / "about 2 days": how far past a deadline an agreed-late task would finish. */
+  const lateWords = (mins) => (mins < 90 ? `${Math.max(5, Math.round(mins / 5) * 5)} min` : mins < 36 * 60 ? `about ${Math.round(mins / 60)} hrs` : `about ${Math.round(mins / 1440)} days`);
+  // Too much work: SIKAD works out a plan that fits (S.suggestAdjustment) and asks before using it.
+  const overloadSig = () => (state.unscheduled || []).filter((u) => u.reason === 'no_time').map((u) => `${u.unitId}:${u.mins}`).sort().join('|');
+  function offerAdjustment(auto, from) {
+    const adj = from ? S.suggestAdjustment(from.draft, { basePlan: state.plan, because: from.draft.lastUpdate && from.draft.lastUpdate.trigger }) : S.suggestAdjustment(state);
+    if (!adj || !adj.late.length) {
+      if (!auto) toast("SIKAD couldn't find a plan that fits, even with late finishes. Shorten or remove a task under Review options.", { ms: 8000 });
+      return false;
+    }
+    ui.sheet = { type: 'proposal', draft: adj.draft, review: from ? from.review : null, adjust: { late: adj.late, stillUnfit: adj.stillUnfit, auto: !!auto } };
+    return true;
+  }
+  /** After an action: if work newly stopped fitting, show the adjusted plan for a decision. Never during a focus session. */
+  function checkOverload() {
+    const sig = overloadSig();
+    if (!sig) { ui.overloadSig = ''; return; }
+    if (!state.onboarded || sig === ui.overloadSig || ui.sheet || state.active) return;
+    if (pending) { setTimeout(checkOverload, 1200); return; }
+    ui.overloadSig = sig;
+    if (offerAdjustment(true)) render();
+  }
+  let riskMemo = null;   // computed once per render (render() clears it)
+  const todayRisks = () => riskMemo || (riskMemo = E.completionConfidence(state, now()).filter((r) => r.show));
   const estChip = () => '<span class="chip est" title="SIKAD guessed this from the task type. Tap the task to adjust.">AI estimate</span>';
   const approx = (mins) => (mins >= 600 ? `${Math.round(mins / 60)} hrs` : T.dur(mins));
   const hrs = (mins) => Math.round((mins / 60) * 100) / 100;
@@ -147,6 +174,13 @@
         <button class="judge-pill" data-action="dockToggle" aria-expanded="${!!ui.dock}">${ICON.clock}<span>Judge tools</span></button>
         ${ui.dock ? `<div class="judge-panel">
           ${running ? `<div class="jd-row"><button class="jd-btn" data-action="focusSkip" data-mins="5">Skip session ahead 5 min</button></div>` : ''}
+          <p class="jd-label">Demo clock</p>
+          <p class="jd-clock num"><b>${T.date(now())} · ${T.time(now())}</b>${T.shift ? ' <span class="chip moved">Shifted</span>' : ' <span class="muted">real time</span>'}</p>
+          <div class="jd-row" role="group" aria-label="Move the clock">
+            ${[[-60, '−1 hr'], [-15, '−15 min'], [15, '+15 min'], [60, '+1 hr'], [1440, '+1 day']].map(([m, l]) => `<button class="jd-btn" data-action="clockShift" data-mins="${m}">${l}</button>`).join('')}
+          </div>
+          <div class="jd-row"><label class="sr-only" for="jd-jump">Jump to date and time</label><input type="datetime-local" id="jd-jump" class="jd-input" value="${T.toInput(now())}">
+            <button class="jd-btn" data-action="clockJump">Set</button>${T.shift ? '<button class="jd-btn" data-action="clockReal">Use real time</button>' : ''}</div>
           <p class="jd-label">Sample week</p>
           <div class="jd-row">
             <button class="jd-btn" data-action="${on ? 'loadDemoConfirm' : 'loadDemo'}">${on ? "Reset to Alex's week" : "Load Alex's week"}</button>
@@ -280,13 +314,39 @@
    * The Satisfaction (motion-spec §5.2). Call after the store has changed: the old view strikes
    * the finished title, then the real state renders. Any other render in between wins.
    */
+  // Saving. S.save says whether the browser accepted the write; the student is told once when it did not.
+  let saveFailed = false, lastSaved = null;
+  function persist() {
+    const ok = S.save(state);
+    if (ok) { try { lastSaved = localStorage.getItem(S.KEY); } catch (e) { /* unreadable: handled as a failed save next time */ } }
+    if (!ok && !saveFailed) setTimeout(() => toast("This browser isn't saving SIKAD's data (storage is full or blocked, or this is a private window). Your changes will be lost when you close this page.", { ms: 12000 }), 0);
+    saveFailed = !ok;
+    return ok;
+  }
+  // Another tab saved a different plan: show the newer one here instead of writing over it later.
+  window.addEventListener('storage', (e) => {
+    if (e.key !== S.KEY || e.newValue == null || e.newValue === lastSaved) return;
+    const next = S.load();
+    if (!next || next.loadNotice) return;
+    lastSaved = e.newValue;
+    // The clock and logs differ between tabs all the time; only the student's own data counts as a change.
+    const sig = (st) => JSON.stringify(['onboarded', 'user', 'baseline', 'integrations', 'tasks', 'events', 'cancellations', 'history', 'workLog', 'focusLog', 'active'].map((k) => st[k]));
+    if (sig(next) === sig(state)) return;
+    state = next; undoSnap = null; ui.overloadSig = overloadSig();
+    if (pending) { clearTimeout(pending.timer); pending = null; }
+    const hadSheet = !!ui.sheet;
+    ui.sheet = null; ui.error = null;
+    render();
+    toast(`Your plan was changed in another tab. This tab now shows that newer plan${hadSheet ? ', so the open panel was closed' : ''}.`, { ms: 9000 });
+  });
+
   let pending = null;
   function settle(sessionId, after) {
     const sel = `[data-sid="${CSS.escape(sessionId)}"]`;
     const card = document.querySelector(`.focus${sel}`), row = document.querySelector(`.tl-item${sel}`);
     const wait = M.strike([...(card ? card.querySelectorAll('.strike') : []), row && row.querySelector('.tl-name')]);
     if (!wait) { render(); if (after) after(); return; }
-    S.save(state);
+    persist();
     if (card) card.classList.add('is-completing');
     if (row) row.classList.add('is-completing');
     pending = { after, timer: setTimeout(render, wait) };
@@ -330,11 +390,12 @@
   }
 
   function render() {
+    riskMemo = null;
     const after = pending && pending.after;
     if (pending) { clearTimeout(pending.timer); pending = null; }
     clockDirty = false;
     state.obDraft = state.onboarded ? null : ui.ob;
-    S.save(state);
+    persist();
     const opening = !!ui.sheet && !sheetWasOpen, closing = !ui.sheet && sheetWasOpen;
     syncHistory(opening, closing);
     if (opening) sheetOpener = describe(document.activeElement);
@@ -1106,6 +1167,7 @@
             <div><b>${esc(u.title)}</b><span class="num"> · ${T.dur(u.mins)}${u.deadline ? ` · due ${T.short(u.deadline)}` : ''}</span>
             <div class="small">${u.reason === 'blocked' ? `Waiting on: ${esc(u.waitingOn || 'an earlier step')}` : 'No open block before the deadline'}</div></div>
             <button class="btn small" data-action="openTask" data-id="${u.taskId}" aria-label="Adjust ${esc(u.title)}">Adjust</button></li>`).join('')}</ul>
+          <div class="row"><button class="btn small" data-action="suggestAdjust">See a plan that fits</button><span class="small">SIKAD picks what gives way. You decide.</span></div>
           <details class="triage"><summary>${ICON.chevron}Review options</summary>
             <ul class="options">
               <li>Shorten a task's scope (Adjust → Time needed)</li>
@@ -1141,12 +1203,19 @@
     const d = todayStats();
     const from = ui.prevDayPct == null ? d.percent : ui.prevDayPct;
     const count = `${d.done} of ${d.total} task${d.total === 1 ? '' : 's'} completed`;
+    // Only tasks that are genuinely at risk today. "Not enough time before the deadline" has its own card above.
+    const risks = todayRisks().filter((r) => r.level !== 'infeasible').slice(0, 3);
+    const riskBlock = risks.length ? `
+        <ul class="risk-list" aria-label="Tasks that may not get finished today">${risks.map((r) => `<li class="${r.level === 'risk' ? '' : 'is-high'}">
+          <div><b>${esc(r.title)}</b> ${riskChip(r)}<p class="small">${esc(r.reason)}</p></div>
+          <button class="btn small" data-action="openTask" data-id="${r.taskId}" aria-label="Adjust ${esc(r.title)}">Adjust</button></li>`).join('')}</ul>
+        ${risks.some((r) => r.percent != null) ? '<p class="small muted risk-note">Percentages are estimates from today\'s plan, not predictions.</p>' : ''}` : '';
     return `
       <section class="card today" aria-labelledby="today-title" data-flip="today">
         <h2 id="today-title">Today</h2>
         <p class="metric-value num">${d.left ? `${T.dur(d.leftMins)} <span>remaining</span>` : d.total ? 'All tasks completed for today!' : 'No tasks planned for today'}</p>
         ${d.left ? '<p class="small metric-sub">Time needed for your remaining tasks today.</p>' : ''}
-        ${d.total ? `<div class="bar week-bar" role="img" aria-label="${count} today"><span style="--from:${from}%;width:${d.percent}%"></span></div>` : ''}
+        ${d.total ? `<div class="bar week-bar" role="img" aria-label="${count} today"><span style="--from:${from}%;width:${d.percent}%"></span></div>` : ''}${riskBlock}
         <div class="card-foot">${d.total ? `<span class="small num">${count}</span>` : '<span></span>'}<button class="text-link" data-action="viewSchedule">View schedule <span aria-hidden="true">→</span></button></div>
       </section>`;
   }
@@ -1255,7 +1324,13 @@
       if (state.active && state.active.sessionId === it.session.id) chips += '<span class="chip live">In progress</span>';
       else if (isNext) chips += '<span class="chip now">Next</span>';
       if (moved) chips += '<span class="chip moved">Moved</span>';
-      if (t) chips += priChip(t.priority);
+      // "At risk" goes on a task's first session today only (E.completionConfidence is about today).
+      const sameDay = T.dayStart(it.session.start) === T.dayStart(n);
+      const firstToday = sameDay && !state.plan.some((x) => x.taskId === it.session.taskId && T.dayStart(x.start) === T.dayStart(n) && x.start < it.session.start);
+      const risk = firstToday ? todayRisks().find((r) => r.taskId === it.session.taskId && r.percent != null) : null;
+      if (risk) chips += riskChip(risk);
+      if (t && t.lateOk && t.deadline != null && it.session.end > t.deadline) chips += '<span class="chip risk">Late</span>';
+      if (t && (chips.match(/class="chip/g) || []).length < 3) chips += priChip(t.priority);
       // Three chips at most (state, state, priority). The ≈ and this text still mark the estimate.
       if (est && (chips.match(/class="chip/g) || []).length < 3) chips += estChip();
       else if (est) meta += ' · AI estimate';
@@ -1507,7 +1582,9 @@
           <li>A plan isn't a promise. SIKAD can't guarantee grades or that everything fits. It shows you when it doesn't.</li>
           <li>Your classes and fixed commitments never move unless you change them. You decide.</li>
           <li>In this prototype, reading photos/PDFs, voice input, and calendar or class-platform connections use sample data. Planning, rescheduling and Undo work on what you type.</li>
-          <li>Your data stays on this device.</li>
+          <li>"At risk" percentages are rule-based estimates from today's plan. They are not predictions and not measured from your history.</li>
+          <li>Ask SIKAD follows fixed patterns, not an AI model. If it doesn't understand, it asks instead of guessing.</li>
+          <li>Your data stays on this device, in this browser. It isn't synced or backed up, and a private window doesn't keep it.</li>
         </ul>
       </section>
       </div>
@@ -1828,13 +1905,14 @@
   }
 
   function manualForm() {
-    const f = ui.sheet.form || (ui.sheet.form = { title: '', deadline: null, durationMins: 60, priority: 'medium', notes: '' });
+    const f = ui.sheet.form || (ui.sheet.form = { title: '', deadline: null, durationMins: 60, priority: 'medium', difficulty: 'medium', notes: '' });
     return `
       <div class="form">
         <label>Task name <span class="req">(required)</span><input value="${esc(f.title)}" data-bind="sheet.form.title" placeholder="e.g. IT 208 report" required aria-required="true"></label>
         <label>Deadline<input type="datetime-local" value="${f.deadline != null ? T.toInput(f.deadline) : ''}" data-bind="sheet.form.deadline" data-type="dt"></label>
         <label>Estimated duration (hours)<input type="number" min="0.25" step="0.25" value="${hrs(f.durationMins)}" data-bind="sheet.form.durationMins" data-type="hrs"></label>
         <label>Priority (optional)<select data-bind="sheet.form.priority">${['high', 'medium', 'low'].map((p) => `<option value="${p}" ${p === f.priority ? 'selected' : ''}>${PRI_LABEL[p]}</option>`).join('')}</select></label>
+        <label>Difficulty (optional)<select data-bind="sheet.form.difficulty">${S.DIFFICULTIES.map((p) => `<option value="${p}" ${p === (f.difficulty || 'medium') ? 'selected' : ''}>${DIFF_LABEL[p]}</option>`).join('')}</select></label>
         <label>Notes (optional)<textarea rows="2" data-bind="sheet.form.notes">${esc(f.notes)}</textarea></label>
         <button class="btn primary block" data-action="saveManual">Add to plan</button>
       </div>`;
@@ -1932,7 +2010,24 @@
       case 'cancel_occurrence':
         return `<article class="review-card">${rcKind(ICON.close, 'Cancelled (you said so)')}${it.occurrences.map((o) => `<p class="num">${ICON.lock}<b>${esc(o.title)}</b> · ${T.short(o.start)}, ${T.range(o.start, o.end)}</p>`).join('')}
           <p class="small rc-note">That frees ${T.dur(it.occurrences.reduce((a, o) => a + (o.end - o.start) / T.MIN, 0))}. Only this date changes; your weekly schedule stays the same.</p></article>`;
-      case 'cancel_task': return `<article class="review-card">${rcKind(ICON.close, 'Remove task')}<p><b>${esc(it.title)}</b> will be removed from your plan.</p></article>`;
+      case 'cancel_task': return `<article class="review-card">${rcKind(ICON.close, 'Remove task')}<p><b>${esc(it.title)}</b> will be removed from your tasks and your plan.</p>
+        <p class="small rc-note">Nothing is removed yet. You confirm it on the next step, and Undo is there afterwards.</p></article>`;
+      case 'move': {
+        const first = state.plan.filter((x) => x.taskId === it.taskId).sort((a, b) => a.start - b.start)[0];
+        const to = it.start != null ? `start at <b>${T.short(it.start)} ${T.time(it.start)}</b>` : it.day != null ? `move to <b>${T.short(it.day)}</b>, at the best open time that day or after` : 'move to <b>the next open slot</b>';
+        return `<article class="review-card">${rcKind(ICON.clock, 'Reschedule task')}<p class="num"><b>${esc(it.title)}</b>: ${first ? `now planned ${T.short(first.start)} ${T.time(first.start)} → ` : ''}${to}</p>
+          <p class="small rc-note">Its deadline and time needed stay the same. ${it.start != null ? 'If that time is not free, the next step shows the nearest open slot instead of forcing it. ' : ''}Other tasks may move; classes and fixed commitments never do.</p></article>`;
+      }
+      case 'set_duration': {
+        const t = taskById(it.taskId);
+        return `<article class="review-card">${rcKind(ICON.clock, 'Time needed changed')}<p class="num"><b>${esc(it.title)}</b>: ${t ? `<s><span class="sr-only">was </span>${T.dur(S.taskTotal(t))}</s> → ` : ''}<b>${T.dur(it.mins)}</b> in total</p>
+          <p class="small rc-note">Work already done is kept. The plan is recalculated; if it no longer fits before the deadline, SIKAD will say so.</p></article>`;
+      }
+      case 'rename': return `<article class="review-card">${rcKind(ICON.task, 'Rename task')}<p><s><span class="sr-only">was </span>${esc(it.title)}</s> → <b>${esc(it.newTitle)}</b></p></article>`;
+      case 'set_difficulty': return `<article class="review-card">${rcKind(ICON.task, 'Difficulty changed')}<p><b>${esc(it.title)}</b>: ${DIFF_LABEL[it.oldDifficulty] || 'Medium'} → <b>${DIFF_LABEL[it.difficulty]}</b></p>
+        <p class="small rc-note">Deadlines still come first. Among tasks that are due around the same time, harder ones get the earlier, longer blocks.</p></article>`;
+      case 'set_priority': return `<article class="review-card">${rcKind(ICON.task, 'Priority changed')}<p><b>${esc(it.title)}</b>: ${PRI_LABEL[it.oldPriority] || ''} → <b>${PRI_LABEL[it.priority]}</b></p></article>`;
+      case 'replan': return `<article class="review-card">${rcKind(ICON.undo, 'Replan')}<p>SIKAD will recalculate the rest of your plan from now. Nothing is shortened and fixed commitments stay put.</p></article>`;
       case 'complete': return `<article class="review-card">${rcKind(ICON.check, 'Completed', 'k-success')}<p><b>${esc(it.title)}</b> will be marked done.</p></article>`;
       case 'missed': return `<article class="review-card">${rcKind(ICON.undo, "Didn't finish")}<p>No problem. The remaining work on <b>${esc(it.title)}</b> moves to your next open block.</p></article>`;
       case 'deadline_change': return `<article class="review-card">${rcKind(ICON.clock, `Deadline ${it.oldDeadline == null ? 'set' : 'changed'}`)}<p class="num"><b>${esc(it.title)}</b>: ${it.oldDeadline != null ? `<s><span class="sr-only">was </span>${T.short(it.oldDeadline)}</s> → ` : ''}<b>${T.short(it.deadline)}</b></p></article>`;
@@ -2037,7 +2132,13 @@
           for (const o of it.occurrences) S.cancelOccurrence(state, o);
           triggers.push(`Cancelled ${it.occurrences.map((o) => o.title).join(', ')} (${T.short(it.occurrences[0].start)})`);
           break;
-        case 'cancel_task': if (t) { t.status = 'cancelled'; triggers.push(`Removed task: ${t.title}`); } break;
+        case 'cancel_task': case 'move': case 'set_duration': case 'rename': case 'set_difficulty': case 'set_priority': {
+          // One shared path (S.applyTaskAction) changes the task; the engine decides every time and move.
+          const r = S.applyIntent(state, it);
+          if (r.ok) triggers.push(r.trigger); else notes.push(`${it.title ? `"${it.title}": ` : ''}${r.error}`);
+          break;
+        }
+        case 'replan': triggers.push('Replan the rest of the plan'); break;
         case 'complete': if (t) { S.completeTask(state, t.id); triggers.push(`Completed: ${t.title}`); } break;
         case 'complete_part': if (t) { S.completePart(state, t.id, it.partId); triggers.push(`Finished: ${t.title} — ${it.partTitle}`); } break;
         case 'partial': if (t) { S.setTaskRemaining(state, t.id, it.remainingMins); triggers.push(`Partly done: ${t.title} (${T.dur(S.taskRemaining(t))} left)`); } break;
@@ -2084,6 +2185,8 @@
     if (!changed) { ui.sheet = null; render(); return; }
     committed.engineLog = draft.engineLog.slice(); // the engine produced this output; keep it inspectable even if rejected
     ui.sheet = { type: 'proposal', draft, review: sh };
+    // The change does not fit as asked: show the adjusted plan straight away. "Don't adjust" brings back the plain one.
+    if (offerAdjustment(true, ui.sheet)) ui.sheet.plain = draft;
     render();
   }
 
@@ -2093,20 +2196,31 @@
     const short = d.status === 'INFEASIBLE';
     const crit = (d.alerts || []).find((x) => x.level === 'CRITICAL');
     const skipped = /cancel|skip/i.test(u.trigger + ' ' + u.notes.join(' '));
+    const adj = ui.sheet.adjust;
+    const adjustBlock = adj ? `
+      <div class="status-panel s-clarify" role="status">${ICON.hourglass}<div><b>${adj.late.length === 1 ? 'One task would finish after its deadline' : `${adj.late.length} tasks would finish after their deadlines`}</b>
+        <ul class="late-list">${adj.late.map((l) => `<li><b>${esc(l.title)}</b><span class="num"> · ${T.dur(l.mins)} · ${PRI_LABEL[l.priority] || ''} priority</span>
+          <div class="small num">Due ${T.short(l.deadline)} ${T.time(l.deadline)} → would finish <b>${T.short(l.finish)} ${T.time(l.finish)}</b> (${lateWords(l.lateMins)} late)</div></li>`).join('')}</ul>
+        <p class="small">SIKAD lets as few tasks as possible give way, starting with the lowest priority, and keeps everything else on time. The deadlines themselves are not changed, so check whether a late hand-in is allowed.</p>
+        ${adj.stillUnfit.length ? `<p class="small">Still not fitting: ${adj.stillUnfit.map((x) => `${esc(x.title)} (${T.dur(x.mins)})`).join(', ')}.</p>` : ''}</div></div>` : '';
     return `
-      <h2 id="sheet-title" tabindex="-1">Review the updated plan</h2>
-      <p class="sheet-sub">This is a proposal. Nothing is saved until you accept it.</p>
+      <h2 id="sheet-title" tabindex="-1">${adj ? 'A plan that fits' : 'Review the updated plan'}</h2>
+      <p class="sheet-sub">${adj ? 'You have more work than time before some deadlines. SIKAD adjusted the plan so all of it has a place. Nothing changes unless you accept.' : 'This is a proposal. Nothing is saved until you accept it.'}</p>
+      ${adjustBlock}
       <p class="small">Because: ${esc(u.trigger)}</p>
       ${u.notes.map((x) => `<p class="small">${esc(x)}</p>`).join('')}
       <h3 class="list-h">What would change</h3>
       ${u.changes.length ? `<ul class="changes on-sheet">${u.changes.map((c) => `<li>${changeLine(c)}</li>`).join('')}</ul>` : '<p class="small">No other task needs to move.</p>'}
+      ${(d.alerts || []).filter((x) => x.code === 'PIN_FAILED').map((x) => `<div class="status-panel s-clarify" role="status">${ICON.alert}<div><b>The time you asked for is not available</b><p>${esc(x.message)}</p></div></div>`).join('')}
       ${short ? `<div class="status-panel s-critical" role="status">${ICON.hourglass}<div><b>Not enough time</b><p>${esc(crit ? crit.message : 'Some work would not fit before its deadline.')}</p>
-        <p>Not fitting: ${(d.unscheduled || []).map((x) => `${esc(x.title)} (${T.dur(x.mins)})`).join(', ')}. No deadline or duration was changed to hide this.</p></div></div>` : ''}
+        <p>Not fitting: ${(d.unscheduled || []).map((x) => `${esc(x.title)} (${T.dur(x.mins)})`).join(', ')}. No deadline or duration was changed to hide this.</p>
+        ${adj ? '' : '<button class="btn small" data-action="adjustProposal">See a plan that fits</button>'}</div></div>` : ''}
       <p class="small upd-fixed">${ICON.lock}<span>Fixed commitments unchanged${skipped ? ', except the one you chose to cancel or skip' : ''}.</span></p>
       ${next ? `<p class="small upd-next">${ICON.step}<span>Next would be: <b>${esc(next.title)}</b> · <span class="num">${T.rel(next.start, n)} ${T.timeShort(next.start)}</span></span></p>` : ''}
       <div class="sheet-actions">
-        <button class="btn" data-action="rejectProposal">Reject</button>
-        <button class="btn ghost" data-action="editProposal">Edit</button>
+        <button class="btn" data-action="rejectProposal">${adj ? 'Keep my current plan' : 'Reject'}</button>
+        ${ui.sheet.review ? '<button class="btn ghost" data-action="editProposal">Edit</button>' : ''}
+        ${ui.sheet.plain ? '<button class="btn ghost" data-action="plainProposal">Don\'t adjust</button>' : ''}
         <button class="btn primary" data-action="acceptProposal">Accept changes</button>
       </div>`;
   }
@@ -2117,7 +2231,7 @@
     if (!t) return;
     ui.sheet = { type: 'task', id, d: {
       title: t.title, context: t.context, deadline: t.deadline, total: S.taskTotal(t), priority: t.priority, doFirst: !!t.doFirst,
-      pinnedStart: t.pinnedStart, notes: t.notes || '', parts: t.parts.map((p) => Object.assign({}, p)), dependencies: (t.dependencies || []).slice(),
+      pinnedStart: t.pinnedStart, difficulty: t.difficulty || 'medium', notes: t.notes || '', parts: t.parts.map((p) => Object.assign({}, p)), dependencies: (t.dependencies || []).slice(),
       isAiEstimate: t.isAiEstimate,
     } };
     render();
@@ -2138,6 +2252,7 @@
           <label>Deadline<input type="datetime-local" value="${d.deadline != null ? T.toInput(d.deadline) : ''}" data-bind="${p}.deadline" data-type="dt"></label>
           <label>Time needed ${d.isAiEstimate ? estChip() : ''}<span class="hrs-input ${d.isAiEstimate ? 'is-est' : ''}">${d.isAiEstimate ? '<span aria-hidden="true">≈</span>' : ''}<input type="number" min="0.25" step="0.25" value="${hrs(d.total)}" data-bind="${p}.total" data-type="hrs"> hrs</span></label>
           <label>Priority<select data-bind="${p}.priority">${['high', 'medium', 'low'].map((x) => `<option value="${x}" ${x === d.priority ? 'selected' : ''}>${PRI_LABEL[x]}</option>`).join('')}</select></label>
+          <label>Difficulty<select data-bind="${p}.difficulty">${S.DIFFICULTIES.map((x) => `<option value="${x}" ${x === d.difficulty ? 'selected' : ''}>${DIFF_LABEL[x]}</option>`).join('')}</select></label>
           <label>Schedule at (optional)<input type="datetime-local" value="${d.pinnedStart ? T.toInput(d.pinnedStart) : ''}" data-bind="${p}.pinnedStart" data-type="dt"></label>
         </div>
         <label class="toggle"><input type="checkbox" ${d.doFirst ? 'checked' : ''} data-bind="${p}.doFirst"> Do this first (overrides SIKAD's priority)</label>
@@ -2161,6 +2276,7 @@
     if (d.title.trim() && d.title !== t.title) { t.title = d.title.trim(); changes.push('renamed'); }
     if (d.deadline !== t.deadline) { t.deadline = d.deadline; changes.push('deadline'); }
     if (d.priority !== t.priority) { t.priority = d.priority; changes.push('priority'); }
+    if (S.DIFFICULTIES.includes(d.difficulty) && d.difficulty !== (t.difficulty || 'medium')) { t.difficulty = d.difficulty; changes.push('difficulty'); }
     if (d.doFirst !== !!t.doFirst) { t.doFirst = d.doFirst; changes.push(d.doFirst ? 'do first' : 'normal priority'); }
     if ((d.pinnedStart || null) !== (t.pinnedStart || null)) { t.pinnedStart = d.pinnedStart || null; changes.push('time pinned'); }
     t.notes = d.notes;
@@ -2322,6 +2438,14 @@
     },
     loadDemoConfirm() { askConfirm({ run: 'loadDemo', title: "Replace your data with Alex's week?", body: 'Your classes, tasks and plan on this device are replaced with the sample week. This cannot be undone.', label: 'Replace my data' }); },
     dockToggle() { ui.dock = !ui.dock; render(); },
+    // Demo clock (judge dock only): shift what the app treats as "now". The plan follows through the normal clock sync.
+    clockShift(ds) { T.setShift(T.shift + Number(ds.mins) * T.MIN); syncClock(true); render(); },
+    clockJump() {
+      const el = document.getElementById('jd-jump'), to = el && el.value ? T.fromISO(el.value) : NaN;
+      if (!isFinite(to)) { toast('Pick a date and time first.'); return; }
+      T.setShift(to - T.real()); syncClock(true); render();
+    },
+    clockReal() { T.setShift(0); syncClock(true); render(); },
     versionTap() {
       clearTimeout(versionTimer);
       versionTimer = setTimeout(() => { versionTaps = 0; }, 1500);
@@ -2461,6 +2585,7 @@
       state.engineLog = log;
       syncClock(true);                                     // the snapshot's clock may be a few minutes old
       state.lastUpdate = null;
+      ui.overloadSig = overloadSig();                      // going back is the student's choice: don't offer the adjusted plan again right away
       undoSnap = null; ui.toast = null;
       render();
       toast('Change undone.');
@@ -2605,13 +2730,17 @@
       snapshot('Ask SIKAD');
       draft.engineLog = state.engineLog;
       state = draft;
+      ui.overloadSig = overloadSig();
       ui.dumpDraft = null; ui.dict = null;
       ui.sheet = null; ui.tab = 'home'; ui.focusOnly = false;
       render();
       window.scrollTo({ top: 0, behavior: 'smooth' });
       planToast();
     },
-    rejectProposal() { ui.sheet = null; ui.dumpDraft = null; render(); toast('No changes were made. Your plan is as it was.'); },
+    rejectProposal() { ui.sheet = null; ui.dumpDraft = null; ui.overloadSig = overloadSig(); render(); toast('No changes were made. Your plan is as it was.'); },
+    suggestAdjust() { ui.overloadSig = overloadSig(); if (offerAdjustment(false)) render(); },
+    adjustProposal() { const plain = ui.sheet.draft; if (offerAdjustment(false, ui.sheet)) { ui.sheet.plain = plain; render(); } },
+    plainProposal() { ui.sheet = { type: 'proposal', draft: ui.sheet.plain, review: ui.sheet.review }; render(); },
     editProposal() { ui.sheet = ui.sheet.review; render(); },
     scrollAttention() { const el = document.getElementById('attention'); if (el) { el.scrollIntoView({ block: 'start' }); el.focus({ preventScroll: true }); } },
     dumpEdit() { ui.sheet.mode = 'input'; render(); },
@@ -2633,7 +2762,7 @@
       snapshot('Manual task');
       const { type, est } = P.classify(f.title);
       const task = S.makeTask(state, { title: P.titleCase(f.title.trim()), type, deadline: f.deadline, durationMins: f.durationMins || est,
-        isAiEstimate: !f.durationMins, priority: f.priority, notes: f.notes, parts: P.suggestParts(type, f.durationMins || est) });
+        isAiEstimate: !f.durationMins, priority: f.priority, difficulty: f.difficulty, notes: f.notes, parts: P.suggestParts(type, f.durationMins || est) });
       state.tasks.push(task);
       ui.sheet = null; ui.formDraft = null;
       S.replan(state, `New task: ${task.title}`, { notes: task.deadline == null ? [`"${task.title}" needs a deadline before it can be scheduled.`] : [] });
@@ -2836,7 +2965,7 @@
       if (!quiet && state.checkins.length > hadCheckins) toast('A session ended without "Done". Check in on the Home tab.');
     }
     if (quiet || !clockDirty) return;
-    if (midEntry()) { S.save(state); return; }
+    if (midEntry()) { persist(); return; }
     clockDirty = false;
     render();
   }
@@ -2915,17 +3044,16 @@
     if (pending) { render(); if (!el.isConnected) return; }
     if (el.dataset.action !== 'backdrop') e.preventDefault();
     // ERROR state (design.md §8): if an action throws, put the plan back exactly as it was and say so.
+    // The whole state is copied first, so a failure half-way through an action cannot leave a partial change.
     const before = undoSnap, sheetBefore = ui.sheet ? JSON.parse(JSON.stringify(ui.sheet)) : null;
+    let stateBefore = null;
+    try { stateBefore = JSON.stringify(state); } catch (err) { /* nothing to restore from */ }
     try {
       fn(el.dataset, el, e);
+      checkOverload();
     } catch (err) {
       console.warn('SIKAD action failed:', el.dataset.action, err);
-      if (undoSnap && undoSnap !== before) {
-        const log = state.engineLog;
-        state = Object.assign(S.initialState(), JSON.parse(undoSnap.json));
-        state.engineLog = log;
-        undoSnap = before;
-      }
+      if (stateBefore) { state = Object.assign(S.initialState(), JSON.parse(stateBefore)); undoSnap = before; }
       ui.error = { detail: '', retrySheet: sheetBefore };
       ui.sheet = null; ui.tab = 'home';
       render();
@@ -3004,6 +3132,7 @@
   if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (!document.documentElement.dataset.theme) render(); });
 
   // Tell the student if saved data was unreadable and had to be replaced.
+  ui.overloadSig = overloadSig();   // an overload that was already there is not announced again on opening the app
   if (state.loadNotice) { const msg = state.loadNotice; delete state.loadNotice; setTimeout(() => toast(msg, { ms: 7000 }), 300); }
 
   // Deep link: open the tab named in the URL (e.g. index.html#tasks).

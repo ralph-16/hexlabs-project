@@ -26,8 +26,16 @@
   const T = {
     MIN, HOUR, DAY, OFFSET, DAY_NAMES, DAY_SHORT, MONTHS,
 
-    /** The real current local minute as wall-clock ms. Tests may replace this; the app never does. */
-    now() { const real = Date.now(); return Math.floor(real / MIN) * MIN + tzMins(real) * MIN; },
+    /** The real current local minute as wall-clock ms. Tests may replace `now`; the app never does. */
+    real() { const real = Date.now(); return Math.floor(real / MIN) * MIN + tzMins(real) * MIN; },
+    /** What the app treats as "now": the real minute plus the presenter's demo shift (0 unless set in the judge dock). */
+    now() { return T.real() + T.shift; },
+    shift: 0,
+    /** Presenter tool only: move the app's clock by `ms` from real time (0 = real time). Kept for this browser tab. */
+    setShift(ms) {
+      T.shift = Math.round((Number(ms) || 0) / MIN) * MIN;
+      try { if (T.shift) sessionStorage.setItem('sikad-clock-shift', String(T.shift)); else sessionStorage.removeItem('sikad-clock-shift'); } catch (e) { /* tab-only anyway */ }
+    },
     make(y, mo, d, h = 0, mi = 0) { return Date.UTC(y, mo - 1, d, h, mi); },
     parts(ms) {
       const d = new Date(ms);
@@ -91,5 +99,6 @@
     when(ms, now) { return `${T.rel(ms, now)}, ${T.time(ms)}`; },
   };
 
+  try { T.shift = Number(sessionStorage.getItem('sikad-clock-shift')) || 0; } catch (e) { T.shift = 0; }
   root.TempoTime = T;
 })(typeof window !== 'undefined' ? window : globalThis);

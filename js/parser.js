@@ -343,6 +343,213 @@
     return { title: 'Commitment', kind: 'event' };
   }
 
+  // ------------------------------------------- commands on existing tasks --
+  // "Move X to 8 PM", "Change X to 2 hours", "Rename X to Y", "Remove X", "Mark X as done"…
+  // Rule-based patterns, not a language model. Each command becomes a structured intent that names
+  // one saved task by id; nothing here changes the task. An unknown or ambiguous title becomes a
+  // question, never a new task and never a guess at the first match.
+  const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const isOpen = (t) => t.status !== 'done' && t.status !== 'cancelled';
+  const AMBIGUITY_MARGIN = 0.15;   // two tasks this close in match score are treated as "could be either"
+
+  /** → { task } | { ambiguous: [tasks] } | { closed: task } | { none: true } */
+  function resolveTask(phrase, tasks) {
+    const p = ` ${norm(phrase)} `;
+    const scan = (pool) => {
+      // 1. The full title appears in the text: the longest such title wins; two equal ones are ambiguous.
+      const exact = pool.filter((t) => norm(t.title) && p.includes(` ${norm(t.title)} `));
+      if (exact.length) {
+        const longest = Math.max(...exact.map((t) => norm(t.title).length));
+        return exact.filter((t) => norm(t.title).length === longest);
+      }
+      // 2. Shared title words, with the same threshold matchTask uses.
+      const ct = new Set(tokens(phrase));
+      const scored = pool.map((t) => {
+        const tt = [...new Set(tokens(t.title + ' ' + (t.context || '')))];
+        const shared = tt.filter((w) => ct.has(w)).length;
+        return { t, shared, score: shared / Math.max(1, tt.length) };
+      }).filter((x) => x.shared >= 1 && (x.shared >= 2 || x.score >= 0.5)).sort((a, b) => b.score - a.score);
+      return scored.filter((x) => x.score >= scored[0].score - AMBIGUITY_MARGIN).map((x) => x.t);
+    };
+    const open = scan(tasks.filter(isOpen));
+    if (open.length === 1) return { task: open[0] };
+    if (open.length > 1) return { ambiguous: open };
+    const closed = scan(tasks.filter((t) => !isOpen(t)));
+    return closed.length ? { closed: closed[0] } : { none: true };
+  }
+
+  const describeTask = (t, ctx) => {
+    const first = (ctx.plan || []).filter((x) => x.taskId === t.id).sort((a, b) => a.start - b.start)[0];
+    return `"${t.title}" (${t.deadline != null ? 'due ' + T.short(t.deadline) : 'no deadline'}${first ? ', planned ' + T.short(first.start) + ' ' + T.time(first.start) : ''})`;
+  };
+  const openTitles = (tasks) => tasks.filter(isOpen).slice(0, 6).map((t) => `"${t.title}"`).join(', ');
+
+  const LEAD_RE = /^(?:(?:hey|hi|ok|okay)[, ]+(?:sikad[,:]?\s*)?)?(?:please\s+|kindly\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|i\s+(?:want|need|would like)\s+(?:you\s+)?to\s+|i'?d\s+like\s+(?:you\s+)?to\s+|let'?s\s+)?(?:please\s+)?/i;
+  const CMD_VERBS = 'move|reschedule|resched|schedule|shift|push|put|set|change|update|make|rename|remove|delete|mark|edit|keep|don\'?t|give';
+  const CMD_SPLIT = new RegExp('\\s*,?\\s+(?:and then|then|and|but)\\s+(?=(?:also\\s+)?(?:' + CMD_VERBS + ')\\b)', 'i');
+  const PRONOUN_RE = /\b(it|its|it's|this task|that task|this one|that one)\b/i;
+  const SRC_TIME_RE = /\b(?:my|the)\s+(\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?))\s+(?:[a-z]+\s+){0,2}?(?:task|session|block|work)\b/i;
+  const DIFF_WORDS = { hard: 'hard', difficult: 'hard', tough: 'hard', challenging: 'hard', easy: 'easy', simple: 'easy', light: 'easy', medium: 'medium', moderate: 'medium', normal: 'medium' };
+  const PRIO_WORDS = { high: 'high', top: 'high', urgent: 'high', medium: 'medium', normal: 'medium', low: 'low' };
+  const OVERRUN_RE = /\b(?:took|taking|takes|ran|running|went|going)\s+(?:way\s+|much\s+|a (?:bit|lot)\s+)?(?:longer|over|overtime)\b|\boverran\b|\bover ?ran\b/i;
+  const QUESTION_LEAD_RE = /^(?:show|list|display|find|tell me|what|which|when|where|how|why|who)\b/i;
+  const HELP_TEXT = 'Try one of these: "Move <task> to 8 PM tomorrow", "Change <task> to 2 hours", "Change the deadline for <task> to Friday 5 PM", "Rename <task> to …", "Remove <task>", "Mark <task> as done", or ask "What is due tomorrow?"';
+
+  /**
+   * One sentence part → intents, or null when it is not a command on an existing task
+   * (the caller then reads it as a new task, a commitment or a progress report, as before).
+   * `mem.ref` is the task the message has already named, so "it" has one clear meaning.
+   */
+  function taskCommand(seg, ctx, mem, hasMore) {
+    const body = seg.trim().replace(/[.!?;,]+$/, '').replace(LEAD_RE, '');
+    const lower = body.toLowerCase();
+    const tasks = ctx.tasks || [], now = ctx.now;
+    if (!body) return null;
+    if (ACADEMIC_REQ_RE.test(seg) && ACADEMIC_NOUN_RE.test(seg)) return null;
+    if (NEXT_RE.test(lower)) return null;
+
+    // "…but keep the full duration": always true here, so there is nothing to change.
+    if (/^(?:keep|don'?t\s+(?:shorten|cut|change|split))\b/.test(lower) && /\b(duration|length|time|it|session|full)\b/.test(lower)) return mem.ref ? [] : null;
+    // A question that reached the command parser was not one Ask SIKAD can answer: never turn it into a task.
+    if (QUESTION_LEAD_RE.test(lower)) return [{ type: 'unclear', code: 'QUESTION', question: `I don't have an answer for that yet. ${HELP_TEXT}` }];
+
+    const srcM = body.match(SRC_TIME_RE);
+    const resolve = (text) => {
+      if (srcM) {
+        const tm = parseTimes('at ' + srcM[1]);
+        const hits = (ctx.plan || []).filter((x) => x.start > now - 60 * T.MIN && (x.start - T.dayStart(x.start)) / T.MIN === tm.start);
+        const today = hits.filter((x) => T.dayStart(x.start) === T.dayStart(now));
+        const ids = [...new Set((today.length ? today : hits).map((x) => x.taskId))];
+        if (ids.length === 1) return { task: tasks.find((t) => t.id === ids[0]) };
+        if (ids.length > 1) return { ambiguous: ids.map((id) => tasks.find((t) => t.id === id)) };
+        return { none: true, phrase: srcM[0] };
+      }
+      const r = resolveTask(text, tasks);
+      if (r.none && PRONOUN_RE.test(text)) {
+        if (mem.ref && isOpen(mem.ref)) return { task: mem.ref };
+        if (/\bthis task\b/i.test(text) && currentTask(ctx, tasks)) return { task: currentTask(ctx, tasks) };
+        return { pronoun: true };
+      }
+      return r;
+    };
+    const phraseOf = (text) => text.replace(/^(?:\w+\s+)(?:the\s+(?:deadline|due date|duration|name|title|difficulty|priority)\s+(?:of|for)\s+)?/i, '').split(/\s+(?:to|at|for|from|as|by|if|on)\s+/i)[0].replace(/^(?:my|the)\s+/i, '').trim();
+    const fail = (r, text, what) => {
+      if (r.ambiguous) return [{ type: 'unclear', code: 'TASK_AMBIGUOUS', candidates: r.ambiguous.map((t) => t.id), question: `Which task do you mean: ${r.ambiguous.map((t) => describeTask(t, ctx)).join(' or ')}? Say its full name and I'll ${what}.` }];
+      if (r.closed) return [{ type: 'unclear', code: 'TASK_CLOSED', taskId: r.closed.id, question: `"${r.closed.title}" is already ${r.closed.status === 'done' ? 'marked done' : 'removed'}, so there is nothing to ${what.split(' ')[0]}.` }];
+      if (r.pronoun) return [{ type: 'unclear', code: 'TASK_UNNAMED', question: `Which task do you mean? Name it and I'll ${what}. ${openTitles(tasks) ? 'Your open tasks: ' + openTitles(tasks) + '.' : 'You have no open tasks.'}` }];
+      const named = r.phrase || phraseOf(text);
+      return [{ type: 'unclear', code: 'TASK_NOT_FOUND', question: `I couldn't find a task called "${named}", so nothing was changed and no new task was added. ${openTitles(tasks) ? 'Your open tasks: ' + openTitles(tasks) + '.' : 'You have no open tasks.'}` }];
+    };
+    const hit = (t) => { mem.ref = t; return t; };
+    let m;
+
+    // Rename.
+    if ((m = body.match(/^(?:rename|retitle)\s+(.+?)\s+(?:to|as)\s+["“']?(.+?)["”']?$/i)) || (m = body.match(/^(?:change|set|update|edit)\s+the\s+(?:name|title)\s+(?:of|for)\s+(.+?)\s+(?:to|as)\s+["“']?(.+?)["”']?$/i))) {
+      const r = resolve(m[1]);
+      if (!r.task) return fail(r, body, 'rename it');
+      const t = hit(r.task), newTitle = m[2].trim();
+      if (newTitle.length < 2) return [{ type: 'unclear', question: `What should "${t.title}" be called?` }];
+      return [{ type: 'rename', taskId: t.id, title: t.title, newTitle }];
+    }
+    // Remove.
+    if ((m = body.match(/^(?:remove|delete|scrap|get rid of)\s+(.+?)(?:\s+(?:from|off|out of)\s+(?:my\s+|the\s+)?(?:tasks?|task list|plan|list|schedule|to-?dos?))?$/i)) || (m = body.match(/^take\s+(.+?)\s+(?:off|out of)\s+(?:my\s+|the\s+)?(?:tasks?|task list|plan|list|schedule)$/i))) {
+      const r = resolve(m[1]);
+      if (!r.task) return fail(r, body, 'remove it');
+      const t = hit(r.task);
+      return [{ type: 'cancel_task', taskId: t.id, title: t.title }];
+    }
+    // Difficulty and priority ("mark X as hard", "set X to high priority").
+    if ((m = lower.match(/^(?:mark|set|make|change|flag)\s+(.+?)\s+(?:as|to)\s+(?:an?\s+)?(hard|difficult|tough|challenging|easy|simple|light|medium|moderate|normal)(?:\s+(?:task|difficulty|one))?$/)) ||
+        (m = lower.match(/^(?:set|change|update)\s+the\s+difficulty\s+(?:of|for)\s+(.+?)\s+to\s+(\w+)$/))) {
+      if (DIFF_WORDS[m[2]]) {
+        const r = resolve(m[1]);
+        if (!r.task) return fail(r, body, 'set its difficulty');
+        const t = hit(r.task);
+        return [{ type: 'set_difficulty', taskId: t.id, title: t.title, difficulty: DIFF_WORDS[m[2]], oldDifficulty: t.difficulty || 'medium' }];
+      }
+    }
+    if ((m = lower.match(/^(?:mark|set|make|change|flag)\s+(.+?)\s+(?:as|to)\s+(high|top|urgent|medium|normal|low)(?:\s+priority)?$/)) ||
+        (m = lower.match(/^(?:set|change|update)\s+the\s+priority\s+(?:of|for)\s+(.+?)\s+to\s+(\w+)$/))) {
+      if (PRIO_WORDS[m[2]] && (/priority/.test(lower) || !DIFF_WORDS[m[2]])) {
+        const r = resolve(m[1]);
+        if (!r.task) return fail(r, body, 'set its priority');
+        const t = hit(r.task);
+        return [{ type: 'set_priority', taskId: t.id, title: t.title, priority: PRIO_WORDS[m[2]], oldPriority: t.priority }];
+      }
+    }
+    // Mark done.
+    if ((m = body.match(/^mark\s+(.+?)\s+(?:as\s+)?(?:done|complete|completed|finished)$/i))) {
+      const r = resolve(m[1]);
+      if (!r.task) return fail(r, body, 'mark it done');
+      const t = hit(r.task);
+      return [{ type: 'complete', taskId: t.id, title: t.title }];
+    }
+
+    const editVerb = /^(?:change|set|update|make|edit|move|push|extend|adjust)\b/.test(lower);
+    // Deadline ("change the deadline for X to Friday at 5 PM"). Only the deadline changes, never the planned time.
+    if (editVerb && /\b(deadline|due date|due)\b/.test(lower)) {
+      const r = resolve(body);
+      if (!r.task) return fail(r, body, 'change its deadline');
+      const t = hit(r.task);
+      const date = parseDate(body, now), time = parseTimes(body, date && date.evening);
+      if (!date) return [{ type: 'unclear', code: 'DEADLINE_WHEN', taskId: t.id, question: `What is the new deadline for "${t.title}"? Give the day, and a time if it matters (for example "Friday at 5 PM").` }];
+      return [{ type: 'deadline_change', taskId: t.id, title: t.title, deadline: deadlineFor(date.day, time, t.type, ctx), oldDeadline: t.deadline }];
+    }
+    // Ran over ("X took longer than expected"): the remaining time is the student's to say.
+    if (OVERRUN_RE.test(lower)) {
+      const r = resolve(body);
+      if (!r.task) return r.none ? [{ type: 'unclear', code: 'TASK_UNNAMED', question: 'Which task ran over, and about how much time does it still need?' }] : fail(r, body, 'replan the rest');
+      const t = hit(r.task);
+      const left = /\b(still|left|remaining|to go|more)\b/.test(lower) ? parseDuration(body) : null;
+      return [{ type: 'partial', taskId: t.id, title: t.title, remainingMins: left ? left.mins : null }];
+    }
+    // Duration ("change X to 2 hours", "set the estimate for X to 90 minutes").
+    const dur = parseDuration(body);
+    if (dur && !parseExtra(body) && !/\b(more|another|extra|additional|longer)\b/.test(lower) &&
+        (editVerb || /^give\b/.test(lower) || /\b(?:takes|should take|will take)\b/.test(lower)) && !/\bdue\b/.test(lower) && !parseTimes(body.replace(dur.text, ''))) {
+      const r = resolve(body.replace(dur.text, ''));
+      if (!r.task) return editVerb ? fail(r, body, 'change its time needed') : null;
+      const t = hit(r.task);
+      return [{ type: 'set_duration', taskId: t.id, title: t.title, mins: dur.mins }];
+    }
+    // Schedule or reschedule ("move X to 8 PM if it fits", "schedule X for tomorrow", "next available slot").
+    const strongMove = /^(?:move|reschedule|resched|shift|push)\b/.test(lower);
+    const softMove = /^(?:schedule|put|do|start|plan|slot)\b/.test(lower) || /^(?:set|change|update|edit)\b.*\b(?:schedule|start time|time slot|slot)\b/.test(lower);
+    if (strongMove || softMove) {
+      const rest = srcM ? body.replace(srcM[0], ' ') : body;
+      const date = parseDate(rest, now), time = parseTimes(rest, date && date.evening);
+      if (time && time.range) return null;                                   // "from 6 to 10" is a commitment, not a task move
+      const r = resolve(body);
+      if (!r.task) {
+        if (r.none && !srcM) {
+          if (/\b(rest|remaining|everything|all my|today'?s (?:work|tasks|plan)|my (?:day|plan|schedule|tasks))\b/.test(lower)) return mem.ref ? [] : [{ type: 'replan' }];
+          if (softMove || EVENT_RE.test(lower)) return null;
+        }
+        return fail(r, body, 'move it');
+      }
+      const t = hit(r.task);
+      const base = { type: 'move', taskId: t.id, title: t.title, ifFits: /\bif (?:it|that) fits\b|\bif possible\b|\bif there'?s (?:room|time)\b/.test(lower), start: null, day: null, auto: false };
+      if (/\b(next|first|earliest|soonest|best)\s+(?:available|open|free|possible)?\s*(?:slot|block|time|opening)\b|\bas soon as possible\b|\basap\b/.test(lower)) return [Object.assign(base, { auto: true })];
+      if (time && date) return [Object.assign(base, { start: date.day + time.start * T.MIN })];
+      if (date) return [Object.assign(base, { day: date.day })];
+      if (time) {
+        // A time with no day: use the task's planned day only when it has exactly one and the time is still ahead.
+        const days = [...new Set((ctx.plan || []).filter((x) => x.taskId === t.id).map((x) => T.dayStart(x.start)))];
+        const start = days.length === 1 ? days[0] + time.start * T.MIN : null;
+        if (start != null && start > now) return [Object.assign(base, { start })];
+        return [{ type: 'unclear', code: 'DAY_AMBIGUOUS', taskId: t.id, question: `Which day should "${t.title}" start at ${T.time(T.dayStart(now) + time.start * T.MIN)}? Say the day too, for example "today at ${T.time(T.dayStart(now) + time.start * T.MIN)}" or "tomorrow at ${T.time(T.dayStart(now) + time.start * T.MIN)}".` }];
+      }
+      return [{ type: 'unclear', code: 'MOVE_WHEN', taskId: t.id, question: `When should "${t.title}" move to? Give a day or a time, or say "the next available slot".` }];
+    }
+    // "Edit X" with nothing else: remember the task for "…and set its schedule to 8 PM".
+    if ((m = body.match(/^(?:edit|update|change|modify|adjust)\s+(.+)$/i))) {
+      const r = resolve(m[1]);
+      if (r.task) { hit(r.task); return hasMore ? [] : [{ type: 'unclear', code: 'EDIT_WHAT', taskId: r.task.id, question: `What should change on "${r.task.title}"? I can change its time, deadline, time needed, name, difficulty or priority.` }]; }
+      if (r.ambiguous || r.closed) return fail(r, body, 'edit it');
+    }
+    return null;
+  }
+
   function parse(text, ctx) {
     const now = ctx.now;
     const tasks = ctx.tasks || [];
@@ -351,7 +558,27 @@
     let lastTaskIntent = null;
     let stress = false;
 
-    for (const clause of splitClauses(text)) {
+    // Commands on existing tasks are read a sentence at a time; everything else is read clause by clause as before.
+    const mem = { ref: null };
+    for (const sent of text.replace(/\s+/g, ' ').split(/(?<=[.!?;])\s+|\n+/)) {
+      const segs = sent.split(CMD_SPLIT).filter((x) => x && x.trim());
+      segs.forEach((seg, i) => {
+        const prev = result.intents[result.intents.length - 1];
+        // "…; I still need about 45 minutes" completes the progress report before it.
+        const left = /\b(still need|still have|left|remaining|to go)\b/i.test(seg) && !EVENT_RE.test(seg) ? parseDuration(seg) : null;
+        if (left && prev && prev.type === 'partial' && prev.remainingMins == null && !resolveTask(seg, tasks).task) { prev.remainingMins = left.mins; return; }
+        const cmd = taskCommand(seg, Object.assign({}, ctx, { tasks }), mem, i < segs.length - 1);
+        if (cmd) { result.intents.push(...cmd); return; }
+        const before = result.intents.length;
+        for (const clause of splitClauses(seg)) readClause(clause);
+        const named = result.intents.slice(before).map((x) => x.taskId && tasks.find((t) => t.id === x.taskId)).filter(Boolean);
+        if (named.length === 1) mem.ref = named[0];
+      });
+    }
+    finish();
+    return result;
+
+    function readClause(clause) {
       const lower = clause.toLowerCase();
       if (STRESS_RE.test(lower)) stress = true;
 
@@ -360,9 +587,9 @@
         const noun = clause.match(ACADEMIC_NOUN_RE)[1].toLowerCase();
         const subj = clause.match(/\b(?:my|the|this)\s+((?:[\w-]+\s+){0,3}?)(essay|paper|homework|assignment|report|thesis|worksheet|code|program|reflection|proposal|lab)\b/i);
         result.intents.push({ type: 'refuse', noun, subject: subj ? titleCase((subj[1] + subj[2]).trim()) : titleCase(noun), breakdown: academicBreakdown(noun) });
-        continue;
+        return;
       }
-      if (NEXT_RE.test(lower)) { result.intents.push({ type: 'next' }); continue; }
+      if (NEXT_RE.test(lower)) { result.intents.push({ type: 'next' }); return; }
 
       const flagAmbiguous = !EVENT_RE.test(lower) || /\bdue\b/.test(lower);
       const date = parseDate(clause, now, { flagAmbiguous });
@@ -374,11 +601,11 @@
       if (CANCEL_RE.test(lower) || /\bdon'?t need to\b.*\banymore\b|\bno need to\b/.test(lower)) {
         const day = date ? date.day : T.dayStart(now);
         const occs = matchOccurrences(clause, ctx.occurrencesFor ? ctx.occurrencesFor(day) : []);
-        if (occs.length) { result.intents.push({ type: 'cancel_occurrence', day, occurrences: occs }); continue; }
+        if (occs.length) { result.intents.push({ type: 'cancel_occurrence', day, occurrences: occs }); return; }
         const t = matchTask(clause, tasks);
-        if (t) { result.intents.push({ type: 'cancel_task', taskId: t.id, title: t.title }); continue; }
+        if (t) { result.intents.push({ type: 'cancel_task', taskId: t.id, title: t.title }); return; }
         result.intents.push({ type: 'unclear', question: `Which commitment was cancelled${date ? ' on ' + T.short(day) : ''}? Tell me its name (e.g. "my IT 302 class" or "my org meeting").` });
-        continue;
+        return;
       }
 
       // Deadline change ("the proposal deadline moved to Thursday").
@@ -387,7 +614,7 @@
         if (t && date) {
           const dl = deadlineFor(date.day, time, t.type, ctx);
           result.intents.push({ type: 'deadline_change', taskId: t.id, title: t.title, deadline: dl, oldDeadline: t.deadline });
-          continue;
+          return;
         }
       }
 
@@ -397,7 +624,7 @@
         const t = matchTask(clause, tasks) || currentTask(ctx, tasks);
         if (t) result.intents.push({ type: 'extend', taskId: t.id, title: t.title, addMins: extra });
         else result.intents.push({ type: 'unclear', question: `Which task needs ${T.dur(extra)} more? Name it, e.g. "The database proposal needs another hour."` });
-        continue;
+        return;
       }
       // Part of a task finished ("I finished the first part of my project").
       if (DONE_RE.test(lower) && !NEG_RE.test(lower) && PART_RE.test(lower)) {
@@ -414,17 +641,17 @@
         } else {
           result.intents.push({ type: 'unclear', question: 'Which task did you finish part of? Name it, e.g. "I finished the first part of the database proposal."' });
         }
-        continue;
+        return;
       }
       // Missed / unfinished work.
       if (NEG_RE.test(lower) && /\b(finish|complete|do|start|get to|study|work on|make it)\b/.test(lower)) {
         const t = matchTask(clause, tasks);
-        if (t) { result.intents.push({ type: 'missed', taskId: t.id, title: t.title }); continue; }
+        if (t) { result.intents.push({ type: 'missed', taskId: t.id, title: t.title }); return; }
       }
       // Completion.
       if (DONE_RE.test(lower) && !NEG_RE.test(lower)) {
         const t = matchTask(clause, tasks);
-        if (t) { result.intents.push({ type: 'complete', taskId: t.id, title: t.title }); continue; }
+        if (t) { result.intents.push({ type: 'complete', taskId: t.id, title: t.title }); return; }
       }
 
       // Time-bound commitments (temporary by default, recurring only if stated — §14).
@@ -444,7 +671,7 @@
           result.intents.push({ type: 'event', recurring: false, durationEstimated: !time.range && !dur,
             event: { title, kind, start: day + startM * T.MIN, end: day + endM * T.MIN } });
         }
-        continue;
+        return;
       }
 
       // Task capture.
@@ -474,7 +701,7 @@
         if (parts.length) lt.parts = parts.map((p) => ({ title: p, mins: 0 }));
         if (dur) { lt.durationMins = dur.mins; lt.isAiEstimate = false; }
         if (lt.parts.length) splitPartMins(lt);
-        continue;
+        return;
       }
 
       // Existing task mentioned again → answer, duplicate, or contradiction (§18).
@@ -494,12 +721,12 @@
         } else {
           result.intents.push({ type: 'duplicate', taskId: existing.id, title: existing.title });
         }
-        continue;
+        return;
       }
 
       if (!looksLikeTask || !title || title.length < 3) {
         if (!STRESS_RE.test(lower)) result.intents.push({ type: 'unclear' });
-        continue;
+        return;
       }
 
       const deadline = date && !date.ambiguous ? deadlineFor(date.day, time, ctype, ctx) : null;
@@ -509,6 +736,7 @@
         deadline, deadlineIsWeekEnd: !!(date && date.weekEnd),
         durationMins, isAiEstimate: !dur,
         priority: defaultPriority(ctype, deadline, now, clause),
+        difficulty: /\b(hard|difficult|tough|challenging|tricky)\b/i.test(clause) ? 'hard' : /\b(easy|simple|quick|short)\b/i.test(clause) ? 'easy' : 'medium',
         parts: parts.map((p) => ({ title: p, mins: 0 })),
         dependencies: dependsOn && !dependsOn.id.startsWith('new:') ? [dependsOn.id] : [],
         dependsOnTitle: dependsOn ? dependsOn.title : null,
@@ -531,6 +759,7 @@
       lastTaskIntent = intent;
     }
 
+    function finish() {
     const actionable = result.intents.filter((i) => !['unclear', 'duplicate'].includes(i.type));
     if (stress && !result.intents.some((i) => i.type === 'refuse')) {
       result.intents = result.intents.filter((i) => i.type !== 'unclear');
@@ -544,7 +773,7 @@
     let seenUnclear = false;
     result.intents = result.intents.filter((i) => (i.type === 'unclear' ? (seenUnclear ? false : (seenUnclear = true)) : true));
     if (result.intents.length > 1) result.intents = result.intents.filter((i) => i.type !== 'unclear' || i.question);
-    return result;
+    }
   }
 
   function splitPartMins(task) {
@@ -622,5 +851,5 @@
     return i.question || 'I want to help! Can you tell me specifically what changed? For example: Did you miss a task? Get a new assignment? Have a schedule change?';
   }
 
-  root.TempoParser = { parse, parseSchedule, toPhase2, parseDuration, parseDate, parseTimes, parseExtra, splitClauses, classify, suggestParts, unclearQuestion, titleCase, tokens, matchTask };
+  root.TempoParser = { resolveTask, parse, parseSchedule, toPhase2, parseDuration, parseDate, parseTimes, parseExtra, splitClauses, classify, suggestParts, unclearQuestion, titleCase, tokens, matchTask };
 })(typeof window !== 'undefined' ? window : globalThis);

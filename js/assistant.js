@@ -18,6 +18,10 @@
     feasible: /\b(?:can|could|will) i (?:realistically |really |still |actually )?(?:finish|complete|fit|do|make|get)\b|\b(?:will|does|do) (?:everything|it all|all of (?:it|this)) fit\b|\bis (?:it|everything|this) (?:doable|feasible|possible|realistic)\b|\b(?:do i have|is there) enough time\b/i,
     usable: /\bhow (?:much|many) (?:usable |free |open |available |spare )?(?:time|hours?)\b|\b(?:am i|when am i) free\b|\bdo i have (?:any )?(?:free |open )?time\b/i,
     why: /\bwhy\b/i,
+    // "What if I move X to 8 PM?" — a preview. Checked first so it is never read as a command.
+    whatif: /\bwhat (?:happens|would happen|will happen|changes|would change)\b.*\bif\b|\bwhat if\b|^\s*(?:preview|simulate)\b/i,
+    list: /\b(?:show|list|what|which|display)\b.*\b(?:tasks?|assignments?|deadlines?|due|on my plan|planned|scheduled)\b|\bwhat(?:'s| is| are)\b.*\bdue\b/i,
+    inspect: /\b(?:when|where)(?:'s| is| am| do| did| will)\b|\b(?:show|find|look up|tell me about|status of|details? (?:of|for|on))\b|\bhow (?:much|long)\b.*\b(?:left|remaining|take)\b/i,
     next: /\bwhat (?:should|do|can|must) i (?:do|work on|start|focus on|tackle)\b|\bwhat'?s (?:next|first)\b|\bwhere (?:should|do) i start\b|\bwhat (?:is|comes) next\b/i,
   };
 
@@ -37,14 +41,15 @@
   };
 
   function classify(text) {
-    for (const kind of ['feasible', 'usable', 'why', 'next']) if (Q[kind].test(text)) return kind;
+    if (Q.whatif.test(text)) return 'whatif';
+    for (const kind of ['feasible', 'usable', 'why', 'next', 'list', 'inspect']) if (Q[kind].test(text)) return kind;
     return null;
   }
 
   function answer(state, text) {
     const kind = classify(text || '');
     if (!kind) return null;
-    return { next: answerNext, why: answerWhy, usable: answerUsable, feasible: answerFeasible }[kind](state, text);
+    return { next: answerNext, why: answerWhy, usable: answerUsable, feasible: answerFeasible, list: answerList, inspect: answerInspect, whatif: answerWhatIf }[kind](state, text);
   }
 
   // ------------------------------------------------- "What should I work on next?"
@@ -161,6 +166,74 @@
     if (noDl.length) lines.push(`Not counted: ${noDl.map((t) => `"${t.title}"`).join(', ')} (no deadline yet).`);
     return { kind: 'feasible', title, lines,
       facts: [['Work due by then', T.dur(need)], ['Usable time', span(usable)], ['Tasks', due.map((t) => t.title).join(' · ')]] };
+  }
+
+  // ------------------------------------------------- "Show me the tasks due tomorrow"
+  const plannedFor = (state, t) => state.plan.filter((s) => s.taskId === t.id).sort((a, b) => a.start - b.start);
+  const taskLine = (state, t) => {
+    const first = plannedFor(state, t)[0];
+    const stuck = (state.unscheduled || []).some((u) => u.taskId === t.id);
+    return `"${t.title}": ${t.deadline != null ? 'due ' + T.short(t.deadline) + ' ' + T.time(t.deadline) : 'no deadline yet'} · ${T.dur(remaining(t))} left · ${first ? 'planned ' + T.short(first.start) + ' ' + T.time(first.start) : stuck ? 'does not fit before its deadline' : 'not scheduled'}`;
+  };
+  function answerList(state, text) {
+    const now = state.now, open = openTasks(state);
+    const date = P.parseDate(text, now);
+    const week = /\bthis week\b/i.test(text);
+    const byPlan = /\b(planned|scheduled|on my plan|doing|working on)\b/i.test(text);
+    let picked, label;
+    if (date && byPlan) { picked = open.filter((t) => plannedFor(state, t).some((s) => T.dayStart(s.start) === date.day)); label = `planned for ${T.short(date.day)}`; }
+    else if (date) { picked = open.filter((t) => t.deadline != null && T.dayStart(t.deadline) === date.day); label = `due ${T.short(date.day)}`; }
+    else if (week) { const end = T.endOfWeek(now); picked = open.filter((t) => t.deadline != null && t.deadline <= end); label = 'due this week'; }
+    else if (/\boverdue|late|past (?:its |their )?deadline\b/i.test(text)) { picked = open.filter((t) => t.deadline != null && t.deadline <= now); label = 'past their deadline'; }
+    else { picked = open; label = 'open'; }
+    picked = picked.slice().sort((a, b) => (a.deadline == null) - (b.deadline == null) || a.deadline - b.deadline);
+    if (!picked.length) return { kind: 'list', title: `No tasks ${label}`, lines: [open.length ? `You have ${open.length} open task${open.length === 1 ? '' : 's'}, but none ${label}.` : 'You have no open tasks.'], facts: [], missing: !open.length };
+    const next = E.nextSession(state.plan, now);
+    const lines = picked.map((t) => taskLine(state, t));
+    if (next) lines.push(`Recommended next: "${next.title}", ${T.short(next.start)} at ${T.time(next.start)}.`);
+    return { kind: 'list', title: `${picked.length} task${picked.length === 1 ? '' : 's'} ${label}`, lines, facts: [['Tasks', String(picked.length)], ['Time left', T.dur(sum(picked, remaining))]] };
+  }
+
+  // ------------------------------------------------- "When is the class diagram exercise?"
+  function answerInspect(state, text) {
+    const r = P.resolveTask(text, state.tasks);
+    if (r.none) return null;                                   // not about a task we know: let the caller ask what was meant
+    if (r.ambiguous) return { kind: 'inspect', title: 'Which task?', lines: ['More than one task matches:'].concat(r.ambiguous.map((t) => taskLine(state, t))), facts: [], missing: true };
+    if (r.closed) return { kind: 'inspect', title: r.closed.title, lines: [`"${r.closed.title}" is ${r.closed.status === 'done' ? 'marked done' : 'no longer on your list'}.`], facts: [['Status', r.closed.status === 'done' ? 'Done' : 'Removed']] };
+    const t = r.task, sessions = plannedFor(state, t);
+    const stuck = (state.unscheduled || []).some((u) => u.taskId === t.id);
+    const lines = [t.deadline != null ? `"${t.title}" ${dueWords(t.deadline, state.now)}.` : `"${t.title}" has no deadline yet, so it is not scheduled.`];
+    if (sessions.length) lines.push(`Planned: ${sessions.map((s) => `${T.short(s.start)} ${T.time(s.start)}–${T.time(s.end)}`).join(', ')}.`);
+    else if (stuck) lines.push('It does not fit before its deadline. Options are on Home under "Not enough time".');
+    return { kind: 'inspect', title: t.title, lines,
+      facts: [['Status', t.status === 'in_progress' ? 'In progress' : 'Not done'], ['Time left', `${t.isAiEstimate ? '≈ ' : ''}${T.dur(remaining(t))}${t.isAiEstimate ? ' (AI estimate)' : ''}`], ['Difficulty', t.difficulty || 'medium'], ['Priority', t.priority]] };
+  }
+
+  // ------------------------------------------------- "What happens if I move X to 8 PM?"
+  /** A preview: the change is run on a copy through the same engine. The real plan is not touched. */
+  function answerWhatIf(state, text) {
+    const S = root.TempoStore;
+    const cmd = text.replace(/^.*?\b(?:what if|if)\s+(?:i|we|you)\s+/i, '').replace(/^\s*(?:preview|simulate)\s+/i, '').replace(/[?.!]+\s*$/, '');
+    const parsed = P.parse(cmd, S.parseContext(state));
+    const ask = parsed.intents.find((i) => i.type === 'unclear');
+    const doable = parsed.intents.filter((i) => i.taskId && i.type !== 'unclear' && i.type !== 'duplicate');
+    if (ask || !doable.length) return { kind: 'whatif', title: 'I need a bit more to preview that', lines: [ask && ask.question ? ask.question : 'Name the task and the change, for example "What if I move Class Diagram Exercise to 8 PM tomorrow?"', 'Nothing was changed.'], facts: [], missing: true };
+    const { draft, applied, errors } = S.previewIntents(state, doable);
+    if (!applied.length) return { kind: 'whatif', title: 'That change is not possible', lines: errors.concat('Nothing was changed.'), facts: [], missing: true };
+    const u = draft.lastUpdate || { changes: [] };
+    const when = (x) => `${T.short(x.start)} ${T.time(x.start)}`;
+    const lines = [`If you did this (${applied.join('; ')}):`];
+    for (const c of u.changes || []) {
+      if (c.action === 'RESCHEDULE') lines.push(`"${c.title}": ${when(c.from)} → ${when(c.to)}`);
+      else if (c.action === 'SCHEDULE') lines.push(`"${c.title}": newly planned ${when(c.to)}`);
+      else if (c.action === 'UNSCHEDULED') lines.push(`"${c.title}": would no longer fit before its deadline`);
+      else if (c.action === 'CANCEL' || c.action === 'COMPLETE') lines.push(`"${c.title}": leaves the plan`);
+    }
+    if (!(u.changes || []).length) lines.push('No planned session would move.');
+    for (const a of draft.alerts || []) if (a.code === 'PIN_FAILED' || a.level === 'CRITICAL') lines.push(a.message);
+    lines.push('This is only a preview. Nothing was changed. Say it as an instruction to get a proposal you can accept or reject.');
+    return { kind: 'whatif', title: draft.status === 'INFEASIBLE' ? 'Preview: not everything would fit' : 'Preview of that change', lines,
+      facts: [['Sessions that move', String((u.changes || []).filter((c) => c.action === 'RESCHEDULE').length)], ['Fits', draft.status === 'INFEASIBLE' ? 'No' : 'Yes']] };
   }
 
   root.TempoAssistant = { answer, classify };
