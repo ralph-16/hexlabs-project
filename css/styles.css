@@ -936,6 +936,20 @@ main:focus { outline: none; }
 .week-line { margin: 4px 0; color: var(--ink-2); }
 .week-line b { color: var(--ink); }
 .week.win .week-pct { animation: winPop .5s var(--ease-out); }
+/* Today card, weekly card footer and Overview's weekly summary share these. */
+.metric-value { display: block; margin: 0; font-size: 20px; line-height: 26px; font-weight: 600; color: var(--ink); }
+.metric-value span { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--ink-2); }
+.metric-sub { display: block; margin: 2px 0 0; color: var(--ink-2); }
+.metric-label { display: block; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--ink-2); }
+.card-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0 12px; margin-top: 4px; color: var(--ink-2); }
+.card-foot .text-link { margin-left: auto; }
+.card.today, .card.week { padding-bottom: 6px; }
+.metrics { list-style: none; margin: 0; padding: 0; }
+.metrics li { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.metrics li:first-child { border-top: 0; padding-top: 4px; }
+.metrics li:last-child { padding-bottom: 0; }
+.metrics svg { flex: none; width: 20px; height: 20px; margin-top: 2px; color: var(--forest); }
+#schedule { scroll-margin-top: 16px; }
 @keyframes winPop { 0% { transform: scale(1); } 40% { transform: scale(1.18); } 100% { transform: scale(1); } }
 .session-log summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--forest); min-height: var(--target); display: flex; align-items: center; gap: 6px; list-style: none; }
 .session-log summary::-webkit-details-marker { display: none; }

@@ -375,8 +375,9 @@ To make SIKAD feel premium, motion must feel **tactile, physical, and snappy**.
      3. **check-ins**
      4. **Focus Card**
      5. blocking status (Not enough time / Needs a deadline / warnings)
-     6. "This week": a progress bar and one line that also says whether it all fits ("6 of 9 hrs done · 3 sessions · Fits")
-     7. timeline (Today / Tomorrow segmented control)
+     6. "Today": remaining task time today, "3 of 5 tasks completed" with a bar, and a "View schedule →" link that brings today's timeline into view
+     7. "Weekly task progress": percent and bar of planned task time completed ("13 hrs completed of 15 hrs 15 min planned", then time left · sessions), with the Fits verdict on its own row beside "View weekly overview →"
+     8. timeline (Today / Tomorrow segmented control)
    - **Primary action:** the Focus Card's Butter button (the only Butter on screen).
 3. **Daily timeline and task list**
    - **Timeline:** §7.4 (Home and Overview).
@@ -386,7 +387,7 @@ To make SIKAD feel premium, motion must feel **tactile, physical, and snappy**.
    - **Navigation:** the centre action is labelled "Ask SIKAD" (it opens the brain-dump sheet).
 4. **Overview**
    - **Header:** h1 "Overview", then ‹ week label ("Oct 5–11") › and a "This week" button when away from the current week. Weeks run Monday to Sunday.
-   - **Progress card on every week:** current and future weeks show "Available vs. required"; past weeks show "Done vs. planned" with missed and moved counts.
+   - **Progress card on every week:** current and future weeks show "Weekly summary", three stacked metrics (Your time budget, Tasks remaining, Time needed); past weeks show "Done vs. planned" with missed and moved counts.
    - **Past days** list fixed commitments plus what was planned, each with a Done, Missed or Moved chip (icon + word, §5.4).
 
 ---

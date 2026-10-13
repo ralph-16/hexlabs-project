@@ -151,7 +151,8 @@ Interrupt: a tap on the cover fades it out at once. If scripts fail, the cover s
 | Clarification, conflict, infeasible, error cards | Engine status | Enter, 200 ms. No shake, no pulse. | Ghost exit when resolved |
 | Field error | Validation | 4 px rise + fade, 120 ms | — |
 | First plan ("Building your plan") | Onboarding | Step marks fill one at a time; the current step is a static Butter mark. No spinner. | — |
-| Weekly progress bar | Work credited | Width grows from the previous percent, 600 ms, `--ease-out` | — |
+| Weekly progress bar, Today bar | Work credited / task completed | Width grows from the previous percent, 600 ms, `--ease-out` | — |
+| Today card, Weekly summary | First shown | Enter with the view (or as a new `data-flip` key), 200 ms. Not replayed by routine renders. | — |
 | Theme toggle | Tap | Colours cross-fade, 200 ms | — |
 | View change | Tab, Focus-only, onboarding step | 6 px rise + fade on the view, 200 ms | — |
 | Recording dot | While recording | Blink (functional: the mic is live). The only loop in the app. | Stops with the recording |

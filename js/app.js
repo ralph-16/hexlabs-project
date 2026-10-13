@@ -375,7 +375,7 @@
     M.play($app, snap, { sameView: viewKey === lastViewKey, viewEl: $app.querySelector('main, .onboarding'), washNew: !!sig && sig !== lastWashSig });
     lastViewKey = viewKey; lastWashSig = sig;
     if (sig !== dismissSig) { clearTimeout(dismissTimer); dismissSig = sig; if (sig) dismissTimer = setTimeout(autoDismissUpdate, 12000); }
-    if (state.onboarded) ui.prevPct = S.weeklyProgress(state).percent;
+    if (state.onboarded) { ui.prevPct = S.weeklyProgress(state).percent; ui.prevDayPct = todayStats().percent; }
     ui.celebrate = false;
     renderToast();
     tickTimer();
@@ -875,12 +875,13 @@
       ${checkinCards()}
       ${focusCard()}
       <div id="attention" tabindex="-1">${attentionBlock()}</div>
+      ${todayCard()}
       ${weekCard()}
       </div>
       <div class="col-b">
-      <section class="section">
+      <section class="section" id="schedule">
         <div class="section-head" data-flip="tl-head">
-          <h2>${ui.dayView === 'today' ? "Today's timeline" : "Tomorrow's preview"}</h2>
+          <h2 id="schedule-title" tabindex="-1">${ui.dayView === 'today' ? "Today's timeline" : "Tomorrow's preview"}</h2>
           <div class="seg" role="tablist" aria-label="Day to show">
             <button role="tab" aria-selected="${ui.dayView === 'today'}" class="${ui.dayView === 'today' ? 'on' : ''}" data-action="dayView" data-v="today">Today</button>
             <button role="tab" aria-selected="${ui.dayView === 'tomorrow'}" class="${ui.dayView === 'tomorrow' ? 'on' : ''}" data-action="dayView" data-v="tomorrow">Tomorrow</button>
@@ -1124,6 +1125,33 @@
   }
 
   /**
+   * Today at a glance. Remaining = the unfinished task sessions planned for today (classes, commutes and
+   * other commitments are never counted). A task counts as completed once none of it is left on today's plan.
+   */
+  function todayStats() {
+    const today = T.dayStart(now());
+    const left = state.plan.filter((x) => T.dayStart(x.start) === today);
+    const leftIds = new Set(left.map((x) => x.taskId));
+    const doneIds = new Set(state.history.filter((h) => !h.partial && h.doneAt != null && T.dayStart(h.doneAt) === today && !leftIds.has(h.taskId)).map((h) => h.taskId));
+    const total = leftIds.size + doneIds.size;
+    return { leftMins: left.reduce((a, x) => a + x.mins, 0), left: leftIds.size, done: doneIds.size, total, percent: total ? Math.round((doneIds.size / total) * 100) : 0 };
+  }
+
+  function todayCard() {
+    const d = todayStats();
+    const from = ui.prevDayPct == null ? d.percent : ui.prevDayPct;
+    const count = `${d.done} of ${d.total} task${d.total === 1 ? '' : 's'} completed`;
+    return `
+      <section class="card today" aria-labelledby="today-title" data-flip="today">
+        <h2 id="today-title">Today</h2>
+        <p class="metric-value num">${d.left ? `${T.dur(d.leftMins)} <span>remaining</span>` : d.total ? 'All tasks completed for today!' : 'No tasks planned for today'}</p>
+        ${d.left ? '<p class="small metric-sub">Time needed for your remaining tasks today.</p>' : ''}
+        ${d.total ? `<div class="bar week-bar" role="img" aria-label="${count} today"><span style="--from:${from}%;width:${d.percent}%"></span></div>` : ''}
+        <div class="card-foot">${d.total ? `<span class="small num">${count}</span>` : '<span></span>'}<button class="text-link" data-action="viewSchedule">View schedule <span aria-hidden="true">→</span></button></div>
+      </section>`;
+  }
+
+  /**
    * Weekly progress (brief §10). Metric, from S.weeklyProgress: work credited this week
    * against work credited + still planned this week (Mon–Sun). Rescheduling changes the
    * plan side only. No streaks, points or badges.
@@ -1138,12 +1166,15 @@
     const cap = E.capacity(state, now());
     const short = cap.required > cap.free, unsched = (state.unscheduled || []).length > 0;
     const verdict = short ? `${ICON.alert}${T.dur(cap.required - cap.free)} short` : unsched ? `${ICON.hourglass}Not all of it fits` : `${ICON.check}Fits`;
-    const done = w.totalMins ? `<b>${T.dur(w.doneMins)}</b> of <b>${T.dur(w.totalMins)}</b> done` : 'Nothing left to do this week';
+    const done = w.totalMins ? `<b>${T.dur(w.doneMins)}</b> completed of <b>${T.dur(w.totalMins)}</b> planned` : 'Nothing left to do this week';
+    const sessionsLine = `<b>${w.focusSessions}</b> session${w.focusSessions === 1 ? '' : 's'}`;
     return `
       <section class="card week ${win ? 'win' : ''}" aria-labelledby="week-title" data-flip="week">
-        <div class="fit-head"><h2 id="week-title">This week</h2>${w.totalMins ? `<span class="week-pct num">${win ? ICON.check : ''}${w.percent}%</span>` : ''}</div>
+        <div class="fit-head"><h2 id="week-title">Weekly task progress</h2>${w.totalMins ? `<span class="week-pct num">${win ? ICON.check : ''}${w.percent}%</span>` : ''}</div>
         ${w.totalMins ? `<div class="bar week-bar" role="img" aria-label="${T.dur(w.doneMins)} done of ${T.dur(w.totalMins)} planned this week"><span style="--from:${from}%;width:${w.percent}%"></span></div>` : ''}
-        <p class="small num week-line">${done} · <b>${w.focusSessions}</b> session${w.focusSessions === 1 ? '' : 's'} · <span class="fit-verdict ${short || unsched ? 'bad' : 'good'}" title="${T.dur(cap.required)} of work due by ${T.DAY_SHORT[T.dow(cap.until)]}, ${approx(cap.free)} open">${verdict}</span></p>
+        <p class="small num week-line">${done}</p>
+        <p class="small num week-line">${w.leftMins ? `<b>${T.dur(w.leftMins)}</b> of planned task time left · ` : ''}${sessionsLine}</p>
+        <div class="card-foot"><span class="fit-verdict ${short || unsched ? 'bad' : 'good'}" title="${T.dur(cap.required)} of work due by ${T.DAY_SHORT[T.dow(cap.until)]}, ${approx(cap.free)} open">${verdict}</span><button class="text-link" data-action="viewWeek">View weekly overview <span aria-hidden="true">→</span></button></div>
         ${sessions.length ? `<details class="session-log"><summary>${ICON.chevron}Recent focus sessions (${state.focusLog.length})</summary>
           <ul class="plain small num">${sessions.map((f) => `<li><span><b>${esc(f.title)}</b><br>${T.short(f.at)} · ${esc((F.METHODS[f.method] || F.METHODS.none).name)} · ${T.dur(Math.max(1, f.focusedMins))} focused · ${outcomeWord[f.outcome] || f.outcome}</span></li>`).join('')}</ul></details>` : ''}
       </section>`;
@@ -1305,16 +1336,26 @@
         </section>` : `
         <section class="card fit" data-flip="cap"><p class="muted empty-week">Nothing saved for this week.</p></section>`;
     } else {
-      const until = isCurrent ? today + WEEK : w.start + WEEK;
-      const cap = E.capacity(state, n, until);
-      const over = cap.required > cap.free;
-      const pct = cap.free ? Math.min(100, Math.round((cap.required / cap.free) * 100)) : 100;
-      const span = isCurrent ? 'in the next 7 days' : `between now and ${T.short(until - T.DAY)}`;
+      // Same scope as the day chips below: this Monday–Sunday, from now on. Usable time is what the fixed
+      // commitments leave open, whether or not a task is already planned into it.
+      const end = w.start + WEEK, from = Math.max(n, w.start);
+      const inWeek = (ms) => ms >= w.start && ms < end;
+      const budget = Math.round(E.freeSlots(state, T.ceilTo(from, 15), end).reduce((a, x) => a + (x.end - x.start) / T.MIN, 0));
+      const planned = state.plan.filter((x) => x.end > n && inWeek(x.start));
+      const unfit = (state.unscheduled || []).filter((u) => u.deadline != null && u.deadline < end && (isCurrent || u.deadline >= w.start));
+      const openIds = new Set(planned.concat(unfit).map((x) => x.taskId));
+      const doneIds = new Set(state.workLog.filter((x) => inWeek(x.at) && !openIds.has(x.taskId) && (taskById(x.taskId) || {}).status === 'done').map((x) => x.taskId));
+      const needed = planned.reduce((a, x) => a + x.mins, 0) + unfit.reduce((a, x) => a + x.mins, 0);
+      const total = openIds.size + doneIds.size;
+      const metric = (icon, label, value, sub) => `<li>${icon}<div><span class="metric-label">${label}</span><b class="metric-value num">${value}</b><span class="small metric-sub">${sub}</span></div></li>`;
       progress = `
-        <section class="card fit" aria-labelledby="cap-title" data-flip="cap">
-          <div class="fit-head"><h2 id="cap-title">Available vs. required</h2><span class="fit-verdict ${over ? 'bad' : 'good'}">${over ? `${ICON.alert}Over capacity` : `${ICON.check}Fits`}</span></div>
-          <div class="bar ${over ? 'over' : ''}" role="img" aria-label="${T.dur(cap.required)} of tasks against ${approx(cap.free)} of usable time"><span style="width:${pct}%"></span></div>
-          <p class="small num">You have <b>${approx(cap.free)}</b> of usable time ${span} and <b>${T.dur(cap.required)}</b> of tasks due in that window.</p>
+        <section class="card fit summary" aria-labelledby="cap-title" data-flip="cap">
+          <h2 id="cap-title">Weekly summary</h2>
+          <ul class="metrics">
+            ${metric(ICON.week, 'Your time budget', approx(budget), 'Total usable time for tasks this week.')}
+            ${metric(ICON.tasks, 'Tasks remaining', `${openIds.size} of ${total}`, `${doneIds.size} task${doneIds.size === 1 ? '' : 's'} completed this week.`)}
+            ${metric(ICON.clock, 'Time needed', needed ? T.dur(needed) : '0 min', 'Estimated time to finish remaining tasks.')}
+          </ul>
         </section>`;
     }
     return `
@@ -1341,7 +1382,7 @@
             <i class="load" style="--load:${st.load}%"></i><small class="num">${compact(st.planned)}</small></button>`;
         }).join('')}
       </div>
-      <p class="small muted strip-legend">${isPast ? 'Hours = time planned that day. Bar = how much of it got done.' : 'Bar and hours = time planned for tasks that day.'}</p>
+      <p class="small muted strip-legend">${isPast ? 'Hours = time planned that day. Bar = how much of it got done.' : 'Bars show the time needed for your remaining tasks each day.'}</p>
       </div>
       <div class="col-b">
       <section class="section"><div class="section-head"><h2>${T.date(sel)}</h2></div>${sel < today ? pastTimeline(sel) : timeline(sel)}</section>
@@ -2275,7 +2316,7 @@
     loadDemo() {
       state = S.loadDemo(S.reset());
       ui.ob = freshOnboarding(); ui.tab = 'home'; undoSnap = null;
-      ui.sheet = null; ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.formDraft = null; ui.focusPick = null; ui.focusPartial = false; ui.prevPct = null; ui.error = null; ui.dock = false;
+      ui.sheet = null; ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.formDraft = null; ui.focusPick = null; ui.focusPartial = false; ui.prevPct = null; ui.prevDayPct = null; ui.error = null; ui.dock = false;
       render();
       toast("Loaded Alex's week, starting from today. Try Ask SIKAD.", { ms: 6000 });
     },
@@ -2313,7 +2354,7 @@
     loadDemo() { A.loadDemo(); },
     resetAll() {
       state = S.reset(); ui.ob = freshOnboarding(); ui.sheet = null; undoSnap = null;
-      ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.formDraft = null; ui.focusPick = null; ui.prevPct = null; ui.error = null; render();
+      ui.askThread = []; ui.dict = null; ui.dumpDraft = null; ui.formDraft = null; ui.focusPick = null; ui.prevPct = null; ui.prevDayPct = null; ui.error = null; render();
       toast('Everything was erased. Setup starts fresh.');
     },
     deleteTask() {
@@ -2390,6 +2431,17 @@
       if (body && !M.reduced()) body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
     },
     showFullPlan() { ui.focusOnly = false; render(); },
+    // Home's own timeline, on today. No separate schedule page.
+    viewSchedule() {
+      ui.tab = 'home'; ui.sub = null; ui.focusOnly = false; ui.askMenu = false; ui.dayView = 'today'; render();
+      const el = document.getElementById('schedule'), h = document.getElementById('schedule-title');
+      if (el) el.scrollIntoView({ block: 'start', behavior: M.reduced() ? 'auto' : 'smooth' });
+      if (h) h.focus({ preventScroll: true });
+    },
+    viewWeek() {
+      if (ui.weekStart != null) { ui.weekStart = null; ui.weekDay = null; }
+      A.tab({ tab: 'week' });
+    },
     focusOnly() { ui.sheet = null; ui.tab = 'home'; ui.focusOnly = true; render(); window.scrollTo(0, 0); },
     dismissUpdate() { state.lastUpdate = null; render(); },
     skipToMain() { const m = document.getElementById('main'); if (m) m.focus(); },
