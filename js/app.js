@@ -67,7 +67,7 @@
     hourglass: '<svg viewBox="0 0 24 24"><path d="M7 3h10M7 21h10M8 3v3.5a4 4 0 0 0 1.6 3.2L12 12l2.4-2.3A4 4 0 0 0 16 6.5V3M8 21v-3.5a4 4 0 0 1 1.6-3.2L12 12l2.4 2.3a4 4 0 0 1 1.6 3.2V21"/></svg>',
     overlap: '<svg viewBox="0 0 24 24"><rect x="3.5" y="4" width="11" height="11" rx="2"/><rect x="9.5" y="9" width="11" height="11" rx="2"/></svg>',
     undo: '<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
-    step: '<svg viewBox="0 0 24 24"><path d="M3 20c5 0 6-6 9-8s5-2 6-4"/><circle cx="19" cy="6" r="2.6" fill="currentColor"/></svg>',
+    step: '<svg viewBox="92 80 330 330"><path d="M149 366C250 345 345 285 268 241S290 150 366 123" stroke-width="26"/><circle cx="149" cy="366" r="37" fill="currentColor" stroke="none"/><circle cx="366" cy="123" r="37" fill="currentColor" stroke="none"/></svg>',   // one-colour route mark, geometry from icons/sikad.svg
     clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
     bus: '<svg viewBox="0 0 24 24"><rect x="5" y="3.5" width="14" height="14" rx="2.5"/><path d="M5 11h14M8 17.5V20M16 17.5V20M8.5 14.5h.01M15.5 14.5h.01"/></svg>',
     meal: '<svg viewBox="0 0 24 24"><path d="M7 3v8M5 3v4a2 2 0 0 0 4 0V3M7 11v10M16 21V3c-2 1.5-3 4-3 7h3"/></svg>',
@@ -521,7 +521,7 @@
     }).join('')}</div>`;
     const missing = [!ls.working && 'work', !ls.org && 'org'].filter(Boolean);
     return `
-      <div class="mascot-row"><div class="mascot" aria-hidden="true">${ICON.step}</div><div><h1 class="ob-title">A few quick questions</h1><p class="ob-sub">So the plan fits your real day.</p></div></div>
+      <div class="mascot-row"><div class="mascot" aria-hidden="true">${ICON.mark}</div><div><h1 class="ob-title">A few quick questions</h1><p class="ob-sub">So the plan fits your real day.</p></div></div>
       <div class="q">
         <h2 id="q-start">What time does your day usually start?</h2>
         ${chips('ls.dayStart', ls.dayStart, [['05:00', '5:00 AM'], ['06:00', '6:00 AM'], ['07:00', '7:00 AM'], ['08:00', '8:00 AM']], 'q-start')}
@@ -2861,8 +2861,17 @@
     recog.interimResults = true;
     recog.onresult = (e) => {
       if (!ui.dict) return;
+      // Some browsers (Chrome on Android) repeat everything said so far in each new result, so a
+      // result that restates the text is taken as its replacement, not added after it.
+      const join = (a, b) => {
+        const x = a.trim(), y = b.trim(), lx = x.toLowerCase(), ly = y.toLowerCase();
+        if (!y || lx.endsWith(ly)) return x;
+        return !x || ly.startsWith(lx) ? y : `${x} ${y}`;
+      };
       let fin = '', interim = '';
-      for (let i = 0; i < e.results.length; i++) { if (e.results[i].isFinal) fin += e.results[i][0].transcript + ' '; else interim += e.results[i][0].transcript; }
+      for (let i = 0; i < e.results.length; i++) { if (e.results[i].isFinal) fin = join(fin, e.results[i][0].transcript); else interim = join(interim, e.results[i][0].transcript); }
+      const all = join(fin, interim);
+      interim = all.slice(fin.length).trim(); fin = fin ? fin + ' ' : '';
       ui.dict.final = fin; ui.dict.interim = interim;
       const live = document.getElementById('dict-interim');
       if (live) live.textContent = (fin + interim) || 'Listening…';
