@@ -8,6 +8,8 @@ SIKAD is a working, clickable prototype of the product in [user_story.md](prompt
 
 ## Demo script (about 4 minutes)
 
+The full, checked script is [user_flow.md](user_flow.md). The short version below is older; where they differ, follow `user_flow.md`.
+
 1. Open `index.html`. Either do the full setup (name → **Use sample COR** → questions → sync → record or type your tasks → review baseline and tasks → *Generate my schedule*) or tap **Skip setup and load Alex's week**.
 2. Home shows the **Focus Card** ("What to do next" with *Why this?*), **This week** progress, "Does it all fit?", and the timeline.
 3. Open **Ask SIKAD** (centre button). Tap *How much usable time do I have tomorrow?* and *Can I realistically finish everything before Friday?* The answers are computed from the current plan.
@@ -16,6 +18,8 @@ SIKAD is a working, clickable prototype of the product in [user_story.md](prompt
 6. Tap **Snooze** on the Focus Card for a one-tap replan: the timeline cards slide to their new slots. Tap **Done** to see the title struck through before the next task appears.
 7. Try the other demo scenarios in Ask SIKAD: a clash with a class, a missing deadline, a task that depends on another, "write my essay", "I need another hour".
 8. **Profile → View engine output** shows the JSON for every request. **Profile → Reset demo to the initial scenario** restores Alex's week so the demo can be repeated.
+
+How the whole system works and where each part lives in the code: [system_codebase_summary.md](system_codebase_summary.md). A step-by-step demonstration script: [user_flow.md](user_flow.md).
 
 ## How it maps to the spec
 
@@ -33,6 +37,9 @@ Rules the engine enforces:
 - Tasks never land after their deadline. When there isn't enough time, the status is `INFEASIBLE`, with honest triage.
 - Overdue tasks are kept and scheduled first.
 - Task parts and dependencies stay in order.
+- Overdue unfinished work takes the earliest real slot; work it displaces is placed again in deadline order (difficulty second), across as many days as needed.
+- Time passing never marks work done. A block that ends without a report becomes a check-in: **Completed**, **Partly done** or **Not finished**. Unfinished work is planned again, across later days if needed, and shown as a recommended schedule before the plan changes.
+- A tight day is shown as a status with a reason (**At risk today**, **Won't fit today**, **Not enough time**), not as a percentage. The rule-based score behind it is internal.
 - New commitments are one-time unless the input says they recur.
 - AI-estimated durations are labelled as estimates.
 - Deadlines are never invented.
@@ -43,7 +50,7 @@ The visual system follows [design.md](prompts/prompt-2/design.md) (rationale in 
 
 Motion follows [motion-spec.md](motion-spec.md): the replan Shuffle, the completion strike and the Focus Mode spotlight are built with CSS and the Web Animations API in `js/motion.js`. There is no animation library. With "reduce motion" switched on in the OS, nothing animates and no information is lost.
 
-`manifest.webmanifest` and `icons/sikad.svg` let Chrome install SIKAD to a phone's home screen when it is served over HTTPS or localhost. There is no service worker, so the installed app still needs its files to be reachable.
+`manifest.webmanifest` and `icons/sikad.svg` let Chrome install SIKAD to a phone's home screen when it is served over HTTPS or localhost. `sw.js` caches the app shell (network first), so it opens offline after one online visit over HTTPS or localhost.
 
 ## What is in the prototype
 
@@ -76,6 +83,7 @@ A daily streak rewards showing up every day. Student schedules are uneven (exam 
 
 ### What is simulated
 
+- **Widgets and notifications** are previews inside the app (Profile → Test widgets / Test notifications). The notification page draws a phone and shows each notification on it, with buttons that open the matching part of the app. No home-screen widget is installed and no push or system notification is sent.
 - **No AI model is connected.** Understanding text, answering questions and suggesting a working method are fixed JavaScript rules over the app's data.
 - **Schedule import** loads sample text; no OCR runs.
 - **Platform connections** (Google Calendar, Canvas, Teams, Classroom) are toggles only.
@@ -84,11 +92,13 @@ A daily streak rewards showing up every day. Student schedules are uneven (exam 
 
 ## Testing
 
+Manual tests for the user/developer are in [test-guide.md](test-guide.md): five tests, a test log and a correction log. They start as NOT RUN.
+
 ```
 node tests/run-tests.js
 ```
 
-24 logic tests with no dependencies: capture and clarification, Ask SIKAD answers, replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, working-method suggestions, focus-session outcomes, weekly progress, and saved-data handling.
+102 logic tests with no dependencies (102 passed, 0 failed on 14 Oct 2026): capture and clarification, Ask SIKAD answers, replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, working-method suggestions, focus-session outcomes, weekly progress, and saved-data handling.
 
 Browser behaviour (rendering, motion, Focus Mode, reduced motion, refresh, reset) was checked with a headless Chromium script during development, against the acceptance criteria in `motion-spec.md` §10. That script is not part of this repository.
 
@@ -119,6 +129,8 @@ The final implementation brief (`prompts/prompt-5/`) extends the original user s
 
 - Ask SIKAD recognises a fixed set of question and statement patterns. Anything else gets a clarifying question.
 - A running focus session is never ended by the clock; it stays open until the student ends it.
+- SIKAD cannot know whether work was done, so it asks. A check-in stays on Home until it is answered, and that block's time is not planned anywhere until then.
+- Limits that remain: a weekly commitment past midnight has to be entered as two, and "change the deadline for X to next week" takes that Sunday. The confirmed defects in `errors.md` §10 are all fixed.
 - The session timer and the plan both use real time. "Skip session ahead 5 min" in the judge dock moves only the session timer.
 - During the 4-step setup the browser Back button leaves the page; use the on-screen Back button.
 - Data is saved in `localStorage` on this device only. Use **Profile → Reset** to start over.

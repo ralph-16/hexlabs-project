@@ -99,6 +99,24 @@
     const lower = s.toLowerCase();
     const today = T.dayStart(now);
     let m;
+    /** A month and a day → a date this year, or next year if it has passed. Never a date that does not exist. */
+    const calendarDate = (mo, d, text) => {
+      const y = T.parts(now).y, real = (ms) => T.parts(ms).mo === mo && T.parts(ms).d === d;
+      const thisYear = T.make(y, mo, d), nextYear = T.make(y + 1, mo, d);
+      if (!(mo >= 1 && mo <= 12) || !real(thisYear)) {
+        if (mo === 2 && d === 29 && real(nextYear)) return { day: nextYear, text };   // Feb 29 exists next year
+        return { invalid: true, day: null, text, question: `"${text.trim()}" is not a real date. Which date do you mean?` };
+      }
+      if (thisYear >= today - DAY) return { day: thisYear, text };
+      const out = { day: nextYear, text };
+      // Said about a deadline, a date that passed recently is more likely overdue than a year away: ask.
+      if (opts.flagAmbiguous && today - thisYear <= 60 * DAY) {
+        out.past = true;
+        out.ambiguous = [{ day: thisYear, label: `${T.short(thisYear)}, already past (overdue)` }, { day: nextYear, label: `${T.short(nextYear)}, ${y + 1}` }];
+        out.question = `"${text.trim()}" has already passed this year. Do you mean ${T.short(thisYear)}, which makes it overdue, or ${T.short(nextYear)}, ${y + 1}?`;
+      }
+      return out;
+    };
     if ((m = lower.match(/\bday after tomorrow\b/))) return { day: today + 2 * DAY, text: m[0] };
     if ((m = lower.match(/\b(today|tonight|this (?:morning|afternoon|evening))\b/)))
       return { day: today, text: m[0], evening: /tonight|evening|afternoon/.test(m[0]) };
@@ -108,29 +126,41 @@
       return { day: today + numVal(m[1]) * DAY, text: m[0] };
     if ((m = lower.match(/\b(?:(?:sometime|some time|by(?: the)? end of|end of|by)\s+)?(this|next) week(?:end)?\b|\bby the weekend\b|\bend of (?:the )?week\b/))) {
       const eow = T.dayStart(T.endOfWeek(now));
-      return { day: m[1] === 'next' ? eow + 7 * DAY : eow, text: m[0], weekEnd: true };
+      const sun = m[1] === 'next' ? eow + 7 * DAY : eow, fri = sun - 2 * DAY;
+      const out = { day: sun, text: m[0], weekEnd: true };
+      // "This week" is not a day. For a deadline, ask instead of quietly choosing Sunday.
+      if (opts.flagAmbiguous && fri > today) {
+        out.ambiguous = [{ day: fri, label: `Friday (${T.short(fri)})` }, { day: sun, label: `Sunday (${T.short(sun)})` }];
+        out.question = `"${m[0].trim()}" is not a single day. Do you mean by Friday (${T.short(fri)}) or by Sunday (${T.short(sun)})? You can also set the exact date below.`;
+      }
+      return out;
     }
     if ((m = lower.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/)) ||
         (m = lower.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\b/))) {
       const isMonthFirst = isNaN(+m[1]);
       const mo = MONTHS[(isMonthFirst ? m[1] : m[2]).slice(0, 4).replace(/t$/, '')] || MONTHS[(isMonthFirst ? m[1] : m[2]).slice(0, 3)];
       const d = +(isMonthFirst ? m[2] : m[1]);
-      let day = T.make(T.parts(now).y, mo, d);
-      if (day < today - DAY) day = T.make(T.parts(now).y + 1, mo, d);
-      return { day, text: m[0] };
+      return calendarDate(mo, d, m[0]);
     }
     if ((m = lower.match(/\b(\d{1,2})\/(\d{1,2})\b/))) {
-      let day = T.make(T.parts(now).y, +m[1], +m[2]);
-      if (day < today - DAY) day = T.make(T.parts(now).y + 1, +m[1], +m[2]);
-      return { day, text: m[0] };
+      return calendarDate(+m[1], +m[2], m[0]);
     }
-    const wdRe = new RegExp('\\b(next |this |coming )?' + WD_SRC + '\\b', 'i');
+    const wdRe = new RegExp('\\b(next |this |coming |last )?' + WD_SRC + '\\b', 'i');
     if ((m = lower.match(wdRe))) {
       const wd = WD[m[2]];
       const nowDow = T.dow(now);
       const diff = (wd - nowDow + 7) % 7;
       let day = today + diff * DAY;
       const mod = (m[1] || '').trim();
+      if (mod === 'last') {   // "last Friday" is the one that has gone by, never the coming one
+        const past = today - (((nowDow - wd + 7) % 7) || 7) * DAY, coming = diff === 0 ? day + 7 * DAY : day;
+        const out = { day: past, text: m[0], weekday: wd, past: true };
+        if (opts.flagAmbiguous) {
+          out.ambiguous = [{ day: past, label: `Last ${T.DAY_NAMES[wd]} (${T.short(past)}), overdue` }, { day: coming, label: `This coming ${T.DAY_NAMES[wd]} (${T.short(coming)})` }];
+          out.question = `"${m[0].trim()}" has already passed. Is it overdue (${T.short(past)}), or do you mean this coming ${T.DAY_NAMES[wd]} (${T.short(coming)})?`;
+        }
+        return out;
+      }
       if (mod === 'next') {
         const daysToSunday = (7 - nowDow) % 7;
         if (diff === 0 || (nowDow !== 0 && diff <= daysToSunday)) day += 7 * DAY;
@@ -173,8 +203,11 @@
         }
         if (eH == null) { eH = h2; while (eH * 60 + m2 <= sH * 60 + m1 && eH < 24) eH += 12; }
         let start = sH * 60 + m1, end = eH * 60 + m2;
-        if (end <= start) end = Math.min(start + 12 * 60, 24 * 60);
-        return { range: true, start, end: Math.min(end, 24 * 60), text: m[0] };
+        // "10 PM to 2 AM", with both halves stated, runs past midnight: keep the real end (minutes past 24:00).
+        const overnight = end <= start && !!mer1 && !!mer2;
+        if (overnight) end += 24 * 60;
+        else if (end <= start) end = Math.min(start + 12 * 60, 24 * 60);
+        return { range: true, start, end: overnight ? end : Math.min(end, 24 * 60), overnight, text: m[0] };
       }
     }
     m = s.match(SINGLE_RE);
@@ -352,7 +385,7 @@
   const isOpen = (t) => t.status !== 'done' && t.status !== 'cancelled';
   const AMBIGUITY_MARGIN = 0.15;   // two tasks this close in match score are treated as "could be either"
 
-  /** → { task } | { ambiguous: [tasks] } | { closed: task } | { none: true } */
+  /** → { task } | { ambiguous: [tasks] } | { multi: [tasks] } | { closed: task } | { none: true } */
   function resolveTask(phrase, tasks) {
     const p = ` ${norm(phrase)} `;
     const scan = (pool) => {
@@ -371,6 +404,13 @@
       }).filter((x) => x.shared >= 1 && (x.shared >= 2 || x.score >= 0.5)).sort((a, b) => b.score - a.score);
       return scored.filter((x) => x.score >= scored[0].score - AMBIGUITY_MARGIN).map((x) => x.t);
     };
+    // Two different open tasks named in full: a command acts on one task, so ask rather than pick one.
+    const named = tasks.filter(isOpen).filter((t) => norm(t.title) && p.includes(` ${norm(t.title)} `)).sort((a, b) => norm(b.title).length - norm(a.title).length);
+    if (named.length > 1) {
+      let rest = p; const found = [];
+      for (const t of named) { const k = ` ${norm(t.title)} `; if (rest.includes(k)) { found.push(t); rest = rest.replace(k, ' | '); } }
+      if (found.length > 1) return { multi: found };
+    }
     const open = scan(tasks.filter(isOpen));
     if (open.length === 1) return { task: open[0] };
     if (open.length > 1) return { ambiguous: open };
@@ -434,6 +474,7 @@
     };
     const phraseOf = (text) => text.replace(/^(?:\w+\s+)(?:the\s+(?:deadline|due date|duration|name|title|difficulty|priority)\s+(?:of|for)\s+)?/i, '').split(/\s+(?:to|at|for|from|as|by|if|on)\s+/i)[0].replace(/^(?:my|the)\s+/i, '').trim();
     const fail = (r, text, what) => {
+      if (r.multi) return [{ type: 'unclear', code: 'TASK_MULTIPLE', candidates: r.multi.map((t) => t.id), question: `One task at a time. Your message names ${r.multi.map((t) => `"${t.title}"`).join(' and ')}. Say it again for one of them and I'll ${what}. Nothing was changed.` }];
       if (r.ambiguous) return [{ type: 'unclear', code: 'TASK_AMBIGUOUS', candidates: r.ambiguous.map((t) => t.id), question: `Which task do you mean: ${r.ambiguous.map((t) => describeTask(t, ctx)).join(' or ')}? Say its full name and I'll ${what}.` }];
       if (r.closed) return [{ type: 'unclear', code: 'TASK_CLOSED', taskId: r.closed.id, question: `"${r.closed.title}" is already ${r.closed.status === 'done' ? 'marked done' : 'removed'}, so there is nothing to ${what.split(' ')[0]}.` }];
       if (r.pronoun) return [{ type: 'unclear', code: 'TASK_UNNAMED', question: `Which task do you mean? Name it and I'll ${what}. ${openTitles(tasks) ? 'Your open tasks: ' + openTitles(tasks) + '.' : 'You have no open tasks.'}` }];
@@ -492,6 +533,7 @@
       if (!r.task) return fail(r, body, 'change its deadline');
       const t = hit(r.task);
       const date = parseDate(body, now), time = parseTimes(body, date && date.evening);
+      if (date && date.invalid) return [{ type: 'unclear', code: 'DATE_INVALID', taskId: t.id, question: `${date.question} The deadline for "${t.title}" was not changed.` }];
       if (!date) return [{ type: 'unclear', code: 'DEADLINE_WHEN', taskId: t.id, question: `What is the new deadline for "${t.title}"? Give the day, and a time if it matters (for example "Friday at 5 PM").` }];
       return [{ type: 'deadline_change', taskId: t.id, title: t.title, deadline: deadlineFor(date.day, time, t.type, ctx), oldDeadline: t.deadline }];
     }
@@ -518,6 +560,7 @@
     if (strongMove || softMove) {
       const rest = srcM ? body.replace(srcM[0], ' ') : body;
       const date = parseDate(rest, now), time = parseTimes(rest, date && date.evening);
+      if (date && date.invalid) return [{ type: 'unclear', code: 'DATE_INVALID', question: `${date.question} Nothing was moved.` }];
       if (time && time.range) return null;                                   // "from 6 to 10" is a commitment, not a task move
       const r = resolve(body);
       if (!r.task) {
@@ -545,7 +588,7 @@
     if ((m = body.match(/^(?:edit|update|change|modify|adjust)\s+(.+)$/i))) {
       const r = resolve(m[1]);
       if (r.task) { hit(r.task); return hasMore ? [] : [{ type: 'unclear', code: 'EDIT_WHAT', taskId: r.task.id, question: `What should change on "${r.task.title}"? I can change its time, deadline, time needed, name, difficulty or priority.` }]; }
-      if (r.ambiguous || r.closed) return fail(r, body, 'edit it');
+      if (r.ambiguous || r.closed || r.multi) return fail(r, body, 'edit it');
     }
     return null;
   }
@@ -593,6 +636,7 @@
 
       const flagAmbiguous = !EVENT_RE.test(lower) || /\bdue\b/.test(lower);
       const date = parseDate(clause, now, { flagAmbiguous });
+      if (date && date.invalid) { result.intents.push({ type: 'unclear', question: `${date.question} Nothing was added or changed.` }); return; }
       const time = parseTimes(clause, date && date.evening);
       const { type: ctype, est } = classify(clause);
       const recurring = RECUR_RE.test(lower);
@@ -660,6 +704,10 @@
         const startM = time.start;
         const endM = time.range ? time.end : startM + (dur ? dur.mins : 60);
         const { title, kind } = eventTitle(clause);
+        if (recurring && time.overnight) {   // weekly commitments are stored within one day
+          result.intents.push({ type: 'unclear', question: `A weekly commitment that runs past midnight has to be entered as two: one until 11:59 PM, and one from 12:00 AM on the next day. Nothing was added.` });
+          return;
+        }
         if (recurring) {
           const days = [...lower.matchAll(new RegExp('\\b' + WD_SRC + 's?\\b', 'gi'))].map((x) => WD[x[1]]);
           if (/\bweekdays\b/.test(lower)) days.push(1, 2, 3, 4, 5);
@@ -748,7 +796,7 @@
       if (date && date.ambiguous) {
         ambiguous = date.ambiguous.map((o) => ({ label: o.label, deadline: deadlineFor(o.day, time, ctype, ctx) }));
         const [a, b] = date.ambiguous;
-        clarification = `By "${date.text.trim()}", do you mean ${a.label.replace(/^\w+/, (w) => w.toLowerCase())} or ${b.label.replace(/^Next/, 'next')}?`;
+        clarification = date.question || `By "${date.text.trim()}", do you mean ${a.label.replace(/^\w+/, (w) => w.toLowerCase())} or ${b.label.replace(/^Next/, 'next')}?`;
       } else if (!date) {
         const noun = ctype === 'exam' || ctype === 'quiz' ? title.replace(/^Study for\s+/i, '') : title;
         clarification = `When is ${/^the\b/i.test(noun) ? noun : 'the ' + noun.toLowerCase()} due? I need the date to schedule it.`;

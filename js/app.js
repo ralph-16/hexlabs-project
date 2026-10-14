@@ -48,8 +48,9 @@
   const PRI_BARS = { high: 3, medium: 2, low: 1 };
   const priChip = (p) => `<span class="chip pri" aria-label="${PRI_LABEL[p] || p} priority"><span class="pri-bars" aria-hidden="true">${[1, 2, 3].map((i) => `<i class="${i <= (PRI_BARS[p] || 0) ? '' : 'off'}"></i>`).join('')}</span>${PRI_LABEL[p] || p}</span>`;
   const DIFF_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
-  /** "At risk" chip. The percentage is the rule-based estimate from E.completionConfidence, shown only when a task is at risk. */
-  const riskChip = (r) => `<span class="chip risk ${r.level === 'risk' ? '' : 'high'}" title="Estimate from today's plan, not a prediction. ${esc(r.reason)}">${r.percent != null ? `At risk · ${r.percent}%` : esc(r.label)}</span>`;
+  /** Risk status chip: a plain status, never a number. The score behind it (E.completionConfidence) only decides whether to warn. */
+  const riskChip = (r) => `<span class="chip risk ${r.level === 'risk' || r.level === 'wont_fit' ? '' : 'high'}">${esc(r.label)}</span>`;
+  const riskText = (r) => `<b>${esc(r.what || '')}</b> ${esc(r.why || r.reason || '')}`;
   /** "about 3 hrs" / "about 2 days": how far past a deadline an agreed-late task would finish. */
   const lateWords = (mins) => (mins < 90 ? `${Math.max(5, Math.round(mins / 5) * 5)} min` : mins < 36 * 60 ? `about ${Math.round(mins / 60)} hrs` : `about ${Math.round(mins / 1440)} days`);
   // Too much work: SIKAD works out a plan that fits (S.suggestAdjustment) and asks before using it.
@@ -76,7 +77,6 @@
   const todayRisks = () => riskMemo || (riskMemo = E.completionConfidence(state, now()).filter((r) => r.show));
   const estChip = () => '<span class="chip est" title="SIKAD guessed this from the task type. Tap the task to adjust.">AI estimate</span>';
   const approx = (mins) => (mins >= 600 ? `${Math.round(mins / 60)} hrs` : T.dur(mins));
-  const hrs = (mins) => Math.round((mins / 60) * 100) / 100;
   const ICON = {
     home: '<svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/></svg>',
     week: '<svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
@@ -88,6 +88,8 @@
     // design.md §10 icon set (24px grid, 1.75 stroke, currentColor) — replaces emoji in system UI
     doc: '<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>',
     info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/></svg>',
+    bell: '<svg viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 21h4"/></svg>',
+    grid: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>',
     check: '<svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
     question: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.2 1-1.2 1.8v.5M12 17v.5"/></svg>',
     alert: '<svg viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.5M12 17v.4"/></svg>',
@@ -208,6 +210,48 @@
     return el.value;
   }
 
+  // ---- Date + time, and hours + minutes: two plain inputs each, bound to ONE value at `path` ----
+  // A date-and-time box that is half filled in reports no value at all, and decimal hours cannot say
+  // "1 hr 20 min", so each is split into two fields the student can fill in and change one at a time.
+  const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
+  const fieldId = (path) => 'f-' + path.replace(/[^\w]/g, '-');
+  /** o: { label, extra (html after the label), hint, defTime ('23:59'), rerender, cls, describedby } */
+  function dtField(path, ms, o = {}) {
+    const id = fieldId(path), a = `data-bind="${path}" data-deftime="${o.defTime || '23:59'}"${o.rerender ? ' data-rerender' : ''}${o.describedby ? ` aria-describedby="${o.describedby}"` : ''}`;
+    return `<div class="fld ${o.cls || ''}" role="group" aria-labelledby="${id}-l">
+      <span class="fld-label" id="${id}-l">${o.label}${o.extra || ''}</span>
+      <span class="dt-pair"><input type="date" id="${id}-d" aria-label="${o.label}: date" value="${T.dateInput(ms)}" data-dtpart="date" ${a}><input type="time" id="${id}-t" aria-label="${o.label}: time" value="${T.timeInput(ms)}" data-dtpart="time" ${a}></span>
+      ${o.hint ? `<span class="fld-hint">${o.hint}</span>` : ''}</div>`;
+  }
+  /** o: { label, extra, hint, est (AI estimate styling), estPath, rerender, cls } */
+  function durField(path, mins, o = {}) {
+    const id = fieldId(path), d = mins == null ? { h: '', m: '' } : T.splitDur(mins);
+    const a = `data-bind="${path}"${o.estPath ? ` data-est="${o.estPath}"` : ''}${o.rerender ? ' data-rerender' : ''}`;
+    return `<div class="fld ${o.cls || ''}" role="group" aria-labelledby="${id}-l">
+      <span class="fld-label" id="${id}-l">${o.label}${o.extra || ''}</span>
+      <span class="dur-pair ${o.est ? 'is-est' : ''}">${o.est ? '<span aria-hidden="true">≈</span>' : ''}<input type="number" inputmode="numeric" min="0" max="40" step="1" id="${id}-h" aria-label="${o.label}: hours" value="${d.h}" data-dur="h" ${a}><span aria-hidden="true">hr</span><input type="number" inputmode="numeric" min="0" max="59" step="5" id="${id}-m" aria-label="${o.label}: minutes" value="${d.m}" data-dur="m" ${a}><span aria-hidden="true">min</span></span>
+      ${o.hint ? `<span class="fld-hint">${o.hint}</span>` : ''}</div>`;
+  }
+  /** A date or time field changed: store the pair as one wall-clock value (null while there is no date). */
+  function bindDt(el) {
+    const wrap = el.closest('.dt-pair'), d = wrap.querySelector('[data-dtpart="date"]'), t = wrap.querySelector('[data-dtpart="time"]');
+    if (!d.value && el === d) t.value = '';                                 // clearing the date clears the whole value
+    else if (!d.value && t.value) {                                         // a time alone means the next time that hour comes round
+      const today = T.joinInput(T.key(now()), t.value);
+      d.value = T.key(today != null && today > now() ? today : T.addDays(now(), 1));
+    } else if (d.value && !t.value) t.value = el.dataset.deftime || '23:59';
+    setPath(ui, el.dataset.bind, T.joinInput(d.value, t.value));
+  }
+  /** An hours or minutes field changed. On commit, 90 min is shown as 1 hr 30 min. */
+  function bindDur(el, commit) {
+    const wrap = el.closest('.dur-pair'), h = wrap.querySelector('[data-dur="h"]'), m = wrap.querySelector('[data-dur="m"]');
+    const mins = T.joinDur(h.value, m.value);
+    setPath(ui, el.dataset.bind, mins);
+    if (el.dataset.est) setPath(ui, el.dataset.est, false);
+    if (commit && mins != null) { const d = T.splitDur(mins); h.value = d.h; m.value = d.m; }
+  }
+  const durError = (mins) => (mins == null ? 'Enter the time needed in hours and minutes.' : mins < 5 || mins > 40 * 60 ? 'Time needed must be between 5 minutes and 40 hours.' : '');
+
   /** After a step change, put keyboard/screen-reader focus on the new step's heading. */
   function focusHeading() {
     const h = document.querySelector('.ob-title, main h1');
@@ -259,7 +303,7 @@
   // Browser/phone Back works like a native app: it closes an open sheet, then steps
   // back through tabs. Each tab has a URL (#home, #week, #tasks, #profile).
   const TABS = ['home', 'week', 'tasks', 'profile'];
-  const SUBS = ['classes', 'commitments'];               // Profile management views (#profile/classes)
+  const SUBS = ['classes', 'commitments', 'widgets', 'notifications'];   // Profile sub-views (#profile/classes, #profile/widgets …)
   const route = () => (ui.tab === 'profile' && ui.sub ? `profile/${ui.sub}` : ui.tab);
   function readRoute() {
     const [t, sub] = location.hash.slice(1).split('/');
@@ -286,6 +330,7 @@
     if (ui.sheet) { stopVoice(); keepDraft(); ui.sheet = null; }
     ui.askMenu = false;
     readRoute();
+    ui.notif = null;
     ui.focusOnly = false;
     render();
     fromPop = false;
@@ -694,7 +739,7 @@
           <label class="toggle"><input type="checkbox" ${it.include ? 'checked' : ''} data-bind="sheet.items.${k}.include" data-rerender aria-label="Add ${esc(it.title)} to plan"></label>
           <div class="ir-body">
             <input value="${esc(it.title)}" data-bind="sheet.items.${k}.title" aria-label="Title">
-            <label class="ir-due">Due<input type="datetime-local" value="${it.due != null ? T.toInput(it.due) : ''}" data-bind="sheet.items.${k}.due" data-type="dt"></label>
+            ${dtField(`sheet.items.${k}.due`, it.due, { label: 'Due', cls: 'ir-due' })}
             <div class="ir-chips">${it.course ? `<span class="chip">${esc(it.course)}</span>` : ''}<span class="chip src">${esc(sourceName(it.source))}</span></div>
           </div>
         </article>`).join('') || '<p class="muted">Nothing new to import.</p>'}</div>
@@ -838,7 +883,7 @@
     const p = document.createElement('p');
     p.className = 'field-error'; p.id = id; p.setAttribute('role', 'alert');
     p.innerHTML = `${ICON.alert}<span>${esc(message)}</span>`;
-    (input.closest('label') || input).insertAdjacentElement('afterend', p);
+    (input.closest('label, .fld') || input).insertAdjacentElement('afterend', p);
     input.setAttribute('aria-invalid', 'true');
     input.setAttribute('aria-describedby', id);
     input.focus();
@@ -870,12 +915,8 @@
           : needsDate ? `<div class="clarify" tabindex="-1" data-question>${ICON.question}<div><p id="${qid}"><b>${esc(it.clarification || 'When is this due? I need the date to schedule it.')}</b></p>
             <p class="small">SIKAD won't guess a deadline. Without one, this is saved but not scheduled. Set the due date below.</p></div></div>` : ''}
         <div class="rc-grid">
-          <label class="${needsDate && !it.ambiguous ? 'needs-answer' : ''}">Due
-            <input type="datetime-local" value="${t.deadline != null ? T.toInput(t.deadline) : ''}" data-bind="${path}.task.deadline" data-type="dt" data-rerender ${needsDate ? `aria-describedby="${qid}"` : ''}>
-          </label>
-          <label>Time needed ${t.isAiEstimate ? estChip() : ''}
-            <span class="hrs-input ${t.isAiEstimate ? 'is-est' : ''}">${t.isAiEstimate ? '<span aria-hidden="true">≈</span>' : ''}<input type="number" min="0.25" step="0.25" value="${hrs(t.durationMins)}" data-bind="${path}.task.durationMins" data-type="hrs" data-est="${path}.task.isAiEstimate"> hrs</span>
-          </label>
+          ${dtField(`${path}.task.deadline`, t.deadline, { label: 'Due', cls: needsDate && !it.ambiguous ? 'needs-answer' : '', rerender: true, describedby: needsDate ? qid : '' })}
+          ${durField(`${path}.task.durationMins`, t.durationMins, { label: 'Time needed', extra: t.isAiEstimate ? ' ' + estChip() : '', est: t.isAiEstimate, estPath: `${path}.task.isAiEstimate` })}
           <label>Priority
             <select data-bind="${path}.task.priority">${['high', 'medium', 'low'].map((p) => `<option value="${p}" ${p === t.priority ? 'selected' : ''}>${PRI_LABEL[p]}</option>`).join('')}</select>
           </label>
@@ -893,6 +934,7 @@
         <button class="skip-link" data-action="skipToMain">Skip to main content</button>
         <main class="view view-${ui.tab}" id="main" tabindex="-1" ${ui.askMenu ? 'inert' : ''}>
           ${ui.offline ? `<p class="offline-banner" role="status">${ICON.info}<span>You're offline. Your plan still works. Syncing resumes when you're back.</span></p>` : ''}
+          ${returnBar()}
           ${views[ui.tab]()}</main>
         ${ui.askMenu ? '<div class="ask-scrim" data-action="askMenuClose" aria-hidden="true"></div>' : ''}
         <nav class="bottom-nav ${ui.askMenu ? 'ask-on' : ''}" aria-label="Main">
@@ -934,6 +976,7 @@
       <div class="col-a">
       ${updateCard()}
       ${checkinCards()}
+      ${autoDoneCard()}
       ${focusCard()}
       <div id="attention" tabindex="-1">${attentionBlock()}</div>
       ${todayCard()}
@@ -988,17 +1031,61 @@
       </section>`;
   }
 
+  /**
+   * LEGACY. An earlier version marked a block done when its time passed. SIKAD no longer does that; this
+   * card only appears for such records already saved on this device, so the student can still correct them.
+   */
+  function autoDoneCard() {
+    const list = (state.autoDone || []).filter((r) => !r.seen);
+    if (!list.length) return '';
+    const shown = list.slice(-4).reverse();
+    return `
+      <section class="status-card s-neutral autodone" aria-labelledby="ad-title" data-flip="autodone" data-flip-exit>
+        <div class="sc-head">${ICON.clock}<h2 id="ad-title">Marked done by an earlier version</h2></div>
+        <p>An earlier version of SIKAD counted ${list.length === 1 ? 'this block' : 'these blocks'} as done when the planned time passed. It no longer does that. If you did not finish, put ${list.length === 1 ? 'it' : 'them'} back.</p>
+        <ul class="plain ad-list">${shown.map((r) => `
+          <li><span><b>${esc(r.title)}</b><span class="small num">${T.rel(r.start, now())}, ${T.range(r.start, r.end)}</span></span>
+            <button class="btn small ghost" data-action="autoUndo" data-id="${esc(r.id)}" aria-label="I didn't finish ${esc(r.title)}">I didn't finish</button></li>`).join('')}</ul>
+        ${list.length > shown.length ? `<p class="small">And ${list.length - shown.length} earlier.</p>` : ''}
+        <div class="row"><button class="btn small" data-action="autoAck">${ICON.check} OK, that's right</button></div>
+      </section>`;
+  }
+
+  /**
+   * CHECK-IN. A planned block ended and nothing was reported. Nothing is marked done and nothing is moved:
+   * the block's time is on hold until the student says how it went (store.js, "missed blocks").
+   * Completed is applied at once (with Undo). Partly done and Not finished open a proposal first.
+   */
   function checkinCards() {
-    return state.checkins.slice(-2).map((c) => {
-      const moved = state.plan.find((x) => x.unitId === c.unitId);
+    const list = state.checkins;
+    if (!list.length) return '';
+    const shown = list.slice(0, 3);
+    return shown.map((c) => {
+      const id = `ci-${c.ck.replace(/[^\w]/g, '-')}`, t = taskById(c.taskId) || {};
+      const left = c.partId ? ((t.parts || []).find((p) => p.id === c.partId) || {}).remainingMins || c.mins : t.remainingMins || c.mins;
+      const d = T.splitDur(ui.ckPartial === c.ck && ui.ckLeft != null ? ui.ckLeft : left);   // what the student typed survives a rejected proposal
+      const body = ui.ckPartial === c.ck ? `
+          <span class="fld-label" id="${id}-l">Time still needed for ${esc(c.title.split(' — ').pop())}</span>
+          <div class="row ck-partial"><span class="dur-pair" role="group" aria-labelledby="${id}-l"><input id="ck-left-h" type="number" inputmode="numeric" min="0" max="40" step="1" value="${d.h}" aria-label="Hours still needed"><span aria-hidden="true">hr</span><input id="ck-left-m" type="number" inputmode="numeric" min="0" max="59" step="5" value="${d.m}" aria-label="Minutes still needed"><span aria-hidden="true">min</span></span></div>
+          <div class="row"><button class="btn small" data-action="ckPartialSave" data-ck="${esc(c.ck)}">See recommended schedule</button><button class="btn small ghost" data-action="ckPartialBack">Back</button></div>` : `
+          <div class="row ck-actions"><button class="btn small" data-action="ckDone" data-ck="${esc(c.ck)}">${ICON.check} Completed</button><button class="btn small" data-action="ckPartial" data-ck="${esc(c.ck)}">Partly done</button><button class="btn small" data-action="ckNotDone" data-ck="${esc(c.ck)}">Not finished</button></div>`;
       return `
-        <section class="status-card s-clarify checkin" aria-labelledby="ci-${esc(c.id)}" data-flip="ci:${esc(c.id)}" data-flip-exit>
-          <div class="sc-head">${ICON.undo}<h2 id="ci-${esc(c.id)}">Did you finish ${esc(c.title)}?</h2></div>
-          <p class="num">It was planned for ${T.rel(c.start, now()).toLowerCase()}, ${T.range(c.start, c.end)}.</p>
-          <p>${moved ? `In case you didn't, it's already moved to <b class="num">${T.rel(moved.start, now())} ${T.timeShort(moved.start)}</b>.` : "In case you didn't, it's back in your queue."}</p>
-          <div class="row"><button class="btn small" data-action="checkinDone" data-id="${c.id}">${ICON.check} Yes, done</button><button class="btn small ghost" data-action="checkinNo" data-id="${c.id}">Not yet</button></div>
+        <section class="status-card s-clarify checkin" aria-labelledby="${id}" data-flip="ci:${esc(c.ck)}" data-flip-exit>
+          <div class="sc-head">${ICON.clock}<h2 id="${id}">Your scheduled time for ${esc(c.title)} has ended. How did it go?</h2></div>
+          <p class="num">It was planned for ${T.rel(c.start, now()).toLowerCase()}, ${T.range(c.start, c.end)} · ${T.dur(c.mins)}.</p>
+          <p>Nothing is marked done until you say so. This block's time is on hold, not moved.</p>${body}
         </section>`;
-    }).join('');
+    }).join('') + (list.length > shown.length ? `<p class="small ck-more">${list.length - shown.length} more ended ${list.length - shown.length === 1 ? 'block' : 'blocks'} to answer after ${shown.length === 1 ? 'this' : 'these'}.</p>` : '');
+  }
+  /** Work out the answer to a check-in on a COPY and show it as a proposal. Nothing changes unless it is accepted. */
+  function checkinProposal(ck, kind, mins) {
+    const draft = S.clone(state);
+    delete draft.obDraft;
+    const r = kind === 'partial' ? S.checkinPartial(draft, ck, mins) : S.checkinNotDone(draft, ck);
+    if (!r) { toast('That block is no longer waiting for an answer.'); render(); return; }
+    ui.sheet = { type: 'proposal', draft, checkin: true };
+    if (offerAdjustment(true, ui.sheet)) ui.sheet.plain = draft;   // more work than time: show the plan that fits straight away
+    render();
   }
 
   // "Start Class Diagram Exercise" reads well; "Start Study for…" doesn't (copy only).
@@ -1101,8 +1188,8 @@
           <h3 id="outcome-title" tabindex="-1">Is this piece of work complete?</h3>
           <p>${t.finished ? 'The timer finished. ' : ''}You focused for <b class="num">${T.dur(Math.max(1, t.focusedMins))}</b> using ${esc(m.name.toLowerCase())}. A finished timer does not mark the task done. You decide.</p>
           ${partial ? `
-            <label class="on-dark-label" for="focus-left">Time still needed for ${esc(session.title.split(' — ').pop())}</label>
-            <span class="hrs-input"><input id="focus-left" type="number" min="0.25" step="0.25" value="${hrs(guess)}"> hrs</span>
+            <span class="on-dark-label" id="focus-left-l">Time still needed for ${esc(session.title.split(' — ').pop())}</span>
+            <span class="dur-pair" role="group" aria-labelledby="focus-left-l"><input id="focus-left" type="number" inputmode="numeric" min="0" max="40" step="1" value="${T.splitDur(guess).h}" aria-label="Hours still needed"><span aria-hidden="true">hr</span><input id="focus-left-m" type="number" inputmode="numeric" min="0" max="59" step="5" value="${T.splitDur(guess).m}" aria-label="Minutes still needed"><span aria-hidden="true">min</span></span>
             <div class="focus-actions">
               <button class="btn primary" data-action="focusSavePartial">Save and replan</button>
               <button class="btn on-dark" data-action="focusPartialBack">Back</button>
@@ -1152,7 +1239,7 @@
         <section class="status-card s-clarify" aria-labelledby="nd-${t.id}" data-flip="nd:${t.id}" data-flip-exit>
           <div class="sc-head">${ICON.question}<h2 id="nd-${t.id}">When is "${esc(t.title)}" due?</h2></div>
           <p>SIKAD won't guess a deadline. Add the date and it gets scheduled.</p>
-          <div class="row"><label class="sr-only" for="dl-${t.id}">Deadline for ${esc(t.title)}</label><input type="datetime-local" id="dl-${t.id}"><button class="btn small" data-action="setDeadline" data-id="${t.id}">Schedule it</button></div>
+          <div class="row dl-row"><span class="dt-pair"><input type="date" id="dl-${t.id}" aria-label="Due date for ${esc(t.title)}"><input type="time" id="dl-${t.id}-t" value="23:59" aria-label="Due time for ${esc(t.title)}"></span><button class="btn small" data-action="setDeadline" data-id="${t.id}">Schedule it</button></div>
         </section>`);
     }
     const unsched = state.unscheduled || [];
@@ -1207,9 +1294,9 @@
     const risks = todayRisks().filter((r) => r.level !== 'infeasible').slice(0, 3);
     const riskBlock = risks.length ? `
         <ul class="risk-list" aria-label="Tasks that may not get finished today">${risks.map((r) => `<li class="${r.level === 'risk' ? '' : 'is-high'}">
-          <div><b>${esc(r.title)}</b> ${riskChip(r)}<p class="small">${esc(r.reason)}</p></div>
-          <button class="btn small" data-action="openTask" data-id="${r.taskId}" aria-label="Adjust ${esc(r.title)}">Adjust</button></li>`).join('')}</ul>
-        ${risks.some((r) => r.percent != null) ? '<p class="small muted risk-note">Percentages are estimates from today\'s plan, not predictions.</p>' : ''}` : '';
+          <div><b>${esc(r.title)}</b> ${riskChip(r)}<p class="small">${riskText(r)}</p></div>
+          <button class="btn small" data-action="adjustTask" data-id="${r.taskId}" aria-label="Adjust schedule for ${esc(r.title)}">Adjust schedule</button></li>`).join('')}</ul>
+        <p class="small muted risk-note">Worked out from today's plan and the time left. A rule of thumb, not a prediction.</p>` : '';
     return `
       <section class="card today" aria-labelledby="today-title" data-flip="today">
         <h2 id="today-title">Today</h2>
@@ -1232,7 +1319,7 @@
     const sessions = state.focusLog.slice(-5).reverse();
     const win = ui.celebrate;
     // "Does it all fit?" in one word. Weekly totals can fit while a single deadline doesn't; never say "Fits" when work is unscheduled.
-    const cap = E.capacity(state, now());
+    const cap = E.capacity(state, now(), w.weekEnd - T.MIN);   // the same Monday-to-Sunday week as the bar, on Sundays too
     const short = cap.required > cap.free, unsched = (state.unscheduled || []).length > 0;
     const verdict = short ? `${ICON.alert}${T.dur(cap.required - cap.free)} short` : unsched ? `${ICON.hourglass}Not all of it fits` : `${ICON.check}Fits`;
     const done = w.totalMins ? `<b>${T.dur(w.doneMins)}</b> completed of <b>${T.dur(w.totalMins)}</b> planned` : 'Nothing left to do this week';
@@ -1255,9 +1342,10 @@
     const b = state.baseline;
     const items = [];
     for (const o of E.occurrences(state, dayMs)) items.push({ kind: o.kind, fixed: !o.soft, soft: o.soft, title: o.title, start: o.start, end: o.end, mode: o.mode, occ: o });
-    for (const s of state.plan.filter((x) => T.dayStart(x.start) === dayMs)) items.push({ kind: 'task', title: s.title, start: s.start, end: s.end, session: s });
+    const asked = new Set(state.checkins.map((c) => c.ck));   // a block waiting on a check-in is drawn once, as that
+    for (const s of state.plan.filter((x) => T.dayStart(x.start) === dayMs && !asked.has(`${x.id}@${x.end}`))) items.push({ kind: 'task', title: s.title, start: s.start, end: s.end, session: s });
     for (const h of state.history.filter((x) => T.dayStart(x.start) === dayMs)) items.push({ kind: 'done', title: h.title, start: h.start, end: h.end, taskId: h.taskId, id: h.id, partial: !!h.partial });
-    for (const c of state.checkins.filter((x) => T.dayStart(x.start) === dayMs)) items.push({ kind: 'missed', title: c.title, start: c.start, end: c.end, unitId: c.unitId, id: c.id });
+    for (const c of state.checkins.filter((x) => T.dayStart(x.start) === dayMs)) items.push({ kind: 'missed', title: c.title, start: c.start, end: c.end, unitId: c.unitId, id: c.ck });
     // Open gaps worth knowing about.
     let free = E.freeSlots(state, Math.max(n, T.at(dayMs, b.dayStart)), T.at(dayMs, b.dayEnd));
     for (const s of state.plan) free = free.flatMap((f) => (s.end + 15 * T.MIN <= f.start || s.start - 15 * T.MIN >= f.end) ? [f]
@@ -1327,7 +1415,7 @@
       // "At risk" goes on a task's first session today only (E.completionConfidence is about today).
       const sameDay = T.dayStart(it.session.start) === T.dayStart(n);
       const firstToday = sameDay && !state.plan.some((x) => x.taskId === it.session.taskId && T.dayStart(x.start) === T.dayStart(n) && x.start < it.session.start);
-      const risk = firstToday ? todayRisks().find((r) => r.taskId === it.session.taskId && r.percent != null) : null;
+      const risk = firstToday ? todayRisks().find((r) => r.taskId === it.session.taskId && (r.level === 'risk' || r.level === 'high')) : null;
       if (risk) chips += riskChip(risk);
       if (t && t.lateOk && t.deadline != null && it.session.end > t.deadline) chips += '<span class="chip risk">Late</span>';
       if (t && (chips.match(/class="chip/g) || []).length < 3) chips += priChip(t.priority);
@@ -1340,8 +1428,7 @@
       meta = it.start === it.end ? `Completed · ${T.time(it.start)}` : `${range} · Done`;
     } else if (it.kind === 'missed') {
       icon = ICON.undo; node = 'n-missed';
-      const moved = state.plan.find((x) => x.unitId === it.unitId);
-      meta += ` · Not marked done${moved ? ` — moved to ${T.rel(moved.start, n)} ${T.timeShort(moved.start)}` : ''}`;
+      meta += ' · Ended · waiting for your answer';
     } else if (it.kind === 'free') {
       node = 'n-free';
       meta = `${range} · ${T.dur((it.end - it.start) / T.MIN)} free`;
@@ -1390,7 +1477,8 @@
       }
       const planned = state.plan.filter((x) => T.dayStart(x.start) === d).reduce((a, x) => a + x.mins, 0);
       const free = E.freeSlots(state, Math.max(n, T.at(d, b.dayStart)), T.at(d, b.dayEnd)).reduce((a, x) => a + (x.end - x.start) / T.MIN, 0);
-      return { d, planned, free, load: planned + free ? Math.round((planned / (planned + free)) * 100) : 0 };
+      // `free` is the day's open time around fixed commitments; task sessions sit inside it. A full bar is a full day.
+      return { d, planned, free: Math.max(0, free - planned), load: free ? Math.min(100, Math.round((planned / free) * 100)) : planned ? 100 : 0 };
     });
     const compact = (m) => (m ? `${Math.round((m / 60) * 10) / 10}h` : '—');
     const weeksAway = Math.round((w.start - w.cur) / WEEK);
@@ -1457,7 +1545,7 @@
             <i class="load" style="--load:${st.load}%"></i><small class="num">${compact(st.planned)}</small></button>`;
         }).join('')}
       </div>
-      <p class="small muted strip-legend">${isPast ? 'Hours = time planned that day. Bar = how much of it got done.' : 'Bars show the time needed for your remaining tasks each day.'}</p>
+      <p class="small muted strip-legend">${isPast ? 'Hours = time planned that day. Bar = how much of it got done.' : 'Bars show how much of each day\'s open time is planned. A full bar is a full day.'}</p>
       </div>
       <div class="col-b">
       <section class="section"><div class="section-head"><h2>${T.date(sel)}</h2></div>${sel < today ? pastTimeline(sel) : timeline(sel)}</section>
@@ -1504,8 +1592,9 @@
   function tasksView() {
     const n = now();
     const open = state.tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress');
-    const unschedIds = new Set((state.unscheduled || []).map((u) => u.taskId));
-    const attention = open.filter((t) => t.deadline == null || unschedIds.has(t.id) || t.deadline <= n);
+    // "Needs attention" is worked out from the plan each time: no deadline, no slot, or a block waiting for an answer.
+    // A task that has its slot is not in it, even when it is overdue (it keeps its Overdue mark).
+    const attention = open.filter((t) => S.taskStatus(state, t).attention);
     const upcoming = open.filter((t) => !attention.includes(t)).sort((a, b) => a.deadline - b.deadline);
     const done = state.tasks.filter((t) => t.status === 'done');
     return `
@@ -1524,8 +1613,9 @@
     const unsched = (state.unscheduled || []).some((u) => u.taskId === t.id);
     const isExam = t.type === 'exam' || t.type === 'quiz';
     const overdue = t.deadline != null && t.deadline <= n && t.status !== 'done';
-    const status = t.status === 'done' ? 'Done' : t.status === 'in_progress' ? 'In progress' : t.deadline == null ? 'Needs a deadline' : unsched ? "Doesn't fit yet" : 'Scheduled';
-    const statusCls = t.status === 'done' ? 'st-done' : t.deadline == null ? 'st-clarify' : unsched ? 'st-critical' : '';
+    const ts = S.taskStatus(state, t);                    // derived from the plan every time, so it cannot go stale
+    const status = ts.key === 'done' && (state.autoDone || []).some((r) => r.taskId === t.id && r.finishedTask) ? 'Done · planned time passed' : ts.label;
+    const statusCls = { done: 'st-done', needs_deadline: 'st-clarify', awaiting_answer: 'st-clarify', not_enough_time: 'st-critical' }[ts.key] || '';
     const est = t.isAiEstimate ? `<span class="est-dur">≈ ${T.dur(total)}</span> ${estChip()}` : T.dur(total);
     return `
       <button class="task-card ${t.status}" data-action="openTask" data-id="${t.id}" data-flip="t:${t.id}">
@@ -1551,6 +1641,8 @@
     };
     if (ui.sub === 'classes') return classEditor();
     if (ui.sub === 'commitments') return commitManager();
+    if (ui.sub === 'widgets') return widgetsView();
+    if (ui.sub === 'notifications') return notifsView();
     const subjects = new Set(b.classes.map((c) => c.title)).size;
     const classSum = b.classes.length ? `${plural(subjects, 'class', 'classes')} · ${plural(b.classes.length, 'session')} · ${daySpan(b.classes.map((c) => c.day))}` : 'No classes yet.';
     const groups = commitGroups();
@@ -1581,8 +1673,10 @@
           <li>Times marked <span class="est-dur">≈</span> are guesses. Change them anytime.</li>
           <li>A plan isn't a promise. SIKAD can't guarantee grades or that everything fits. It shows you when it doesn't.</li>
           <li>Your classes and fixed commitments never move unless you change them. You decide.</li>
-          <li>In this prototype, reading photos/PDFs, voice input, and calendar or class-platform connections use sample data. Planning, rescheduling and Undo work on what you type.</li>
-          <li>"At risk" percentages are rule-based estimates from today's plan. They are not predictions and not measured from your history.</li>
+          <li>In this prototype, reading photos/PDFs and calendar or class-platform connections use sample data. Voice uses your browser's own speech recognition where it has one. Planning, rescheduling and Undo work on what you type.</li>
+          <li>SIKAD never marks work done because time passed. When a planned block ends, it asks how it went: Completed, Partly done or Not finished. Until you answer, that block's time is on hold.</li>
+          <li>Widgets and notifications are previews inside this app. The phone on the notification page is a drawing, not your device: SIKAD installs no home-screen widget and sends no push or system notification.</li>
+          <li>"At risk today" and "Won't fit today" come from simple rules about the time left and the work planned. They are not predictions and not measured from your history.</li>
           <li>Ask SIKAD follows fixed patterns, not an AI model. If it doesn't understand, it asks instead of guessing.</li>
           <li>Your data stays on this device, in this browser. It isn't synced or backed up, and a private window doesn't keep it.</li>
         </ul>
@@ -1614,6 +1708,15 @@
         ${sampleNote('Prototype: connections use sample data.')}
       </section>
 
+      <section class="card settings manage-card p-preview">
+        <div class="mc-text"><h2>Widgets</h2><p class="mc-desc">See SIKAD's widgets in three sizes. Previews inside the app.</p></div>
+        <button class="btn small" data-action="profileOpen" data-sub="widgets">Test widgets${ICON.chevron}</button>
+      </section>
+      <section class="card settings manage-card p-preview">
+        <div class="mc-text"><h2>Notifications</h2><p class="mc-desc">Try the five kinds of reminder. Shown inside the app only.</p></div>
+        <button class="btn small" data-action="profileOpen" data-sub="notifications">Test notifications${ICON.chevron}</button>
+      </section>
+
       <section class="card settings p-reset">
         <h2>Reset</h2>
         <p class="small">Erases everything on this device and restarts setup.</p>
@@ -1623,6 +1726,274 @@
       </div>
       ${versionText()}`;
   }
+
+  // ======================================================= WIDGET PREVIEWS ==
+  // In-app previews only. SIKAD installs no home-screen widget; this page shows what one could hold.
+  //
+  // PROVISIONAL CONTENT. Everything a widget says lives in WIDGETS below: its name, copy, the data it
+  // reads from the plan (`data`, read-only), and the sample shown when the plan has nothing for it.
+  // To change a widget, edit its entry here. The layouts (WIDGET_LAYOUT) and the page do not change.
+  const WIDGET_SIZES = [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']];
+  const WIDGET_PREF_KEY = 'sikad-widget-sizes';   // preview preference only; never part of the plan (tempo-state-v1)
+  const WIDGETS = [
+    {
+      id: 'next', layout: 'next', name: 'Next move', about: 'The one thing to do next, and when.', defaultSize: 'medium',
+      copy: { eyebrow: 'What to do next', then: 'After that', empty: 'Nothing planned', emptyHint: 'Add a task and it lands here.' },
+      data(st, n) {
+        const up = st.plan.filter((x) => x.end > n).sort((a, b) => a.start - b.start);
+        if (!up.length) return null;
+        const row = (x) => { const t = taskById(x.taskId) || {}; return { title: x.title, context: t.context || '', when: `${T.rel(x.start, n)} · ${T.timeShort(x.start)}`, range: T.range(x.start, x.end), dur: T.dur(x.mins), due: t.deadline != null ? `Due ${T.rel(t.deadline, n)}, ${T.timeShort(t.deadline)}` : '', est: !!t.isAiEstimate }; };
+        return Object.assign(row(up[0]), { then: up.slice(1, 4).map(row) });
+      },
+      sample: { title: 'Class Diagram Exercise', context: 'IT 203', when: 'Today · 6:15 PM', range: '6:15 PM – 7:15 PM', dur: '1 hr', due: 'Due Tomorrow, 11:59 PM', est: false,
+        then: [{ title: 'Big-O Worksheet', when: 'Today · 7:30 PM', dur: '1 hr' }, { title: 'Use Case Diagram', when: 'Tomorrow · 12:15 PM', dur: '1.5 hrs' }, { title: 'Subnetting Drill', when: 'Tomorrow · 6 PM', dur: '45 min' }] },
+    },
+    {
+      id: 'today', layout: 'today', name: 'Today', about: 'How much is left today, and what is fixed.', defaultSize: 'small',
+      copy: { eyebrow: 'Today', left: 'left today', clear: 'All done for today', none: 'Nothing planned today', count: '{done} of {total} tasks done', fixed: 'Fixed' },
+      data(st, n) {
+        const d = todayStats(), day = T.dayStart(n);
+        const rows = E.occurrences(st, day).filter((o) => !o.soft && o.end > n).map((o) => ({ title: o.title, time: T.timeShort(o.start), start: o.start, fixed: true }))
+          .concat(st.plan.filter((x) => T.dayStart(x.start) === day && x.end > n).map((x) => ({ title: x.title, time: T.timeShort(x.start), start: x.start, fixed: false })))
+          .sort((a, b) => a.start - b.start);
+        if (!d.total && !rows.length) return null;
+        return { leftLabel: d.left ? T.dur(d.leftMins) : '', done: d.done, total: d.total, percent: d.percent, rows };
+      },
+      sample: { leftLabel: '2 hr 30 min', done: 1, total: 4, percent: 25,
+        rows: [{ title: 'IT 207', time: '2 PM', fixed: true }, { title: 'Class Diagram Exercise', time: '6:15 PM', fixed: false }, { title: 'Big-O Worksheet', time: '7:30 PM', fixed: false }, { title: 'Reading notes', time: '8:45 PM', fixed: false }] },
+    },
+    {
+      id: 'week', layout: 'week', name: 'This week', about: 'Progress so far and whether the rest fits.', defaultSize: 'large',
+      copy: { eyebrow: 'This week', of: 'of the week done', line: '{done} done of {total} planned', fits: 'Fits', tight: 'Not all of it fits', due: 'Coming up', none: 'No deadlines this week' },
+      data(st, n) {
+        const w = S.weeklyProgress(st);
+        if (!w.totalMins && !st.tasks.length) return null;
+        const days = Array.from({ length: 7 }, (_, i) => {
+          const d = w.weekStart + i * T.DAY;
+          const mins = st.workLog.filter((x) => T.dayStart(x.at) === d).reduce((a, x) => a + x.mins, 0) + st.plan.filter((x) => x.end > n && T.dayStart(x.start) === d).reduce((a, x) => a + x.mins, 0);
+          return { label: T.DAY_SHORT[T.dow(d)].slice(0, 1), mins, today: d === T.dayStart(n), past: d < T.dayStart(n) };
+        });
+        const due = st.tasks.filter((t) => t.deadline != null && t.deadline > n && t.status !== 'done' && t.status !== 'cancelled').sort((a, b) => a.deadline - b.deadline).slice(0, 3)
+          .map((t) => ({ title: t.title, when: `${T.rel(t.deadline, n)}, ${T.timeShort(t.deadline)}` }));
+        return { percent: w.percent, done: T.dur(w.doneMins), total: T.dur(w.totalMins), fits: st.status !== 'INFEASIBLE' && !(st.unscheduled || []).length, days, due };
+      },
+      sample: { percent: 42, done: '5 hrs', total: '12 hrs', fits: true,
+        days: [['M', 120, 1], ['T', 150, 1], ['W', 90, 0], ['T', 180, 0], ['F', 60, 0], ['S', 120, 0], ['S', 0, 0]].map(([label, mins, past], i) => ({ label, mins, past: !!past, today: i === 2 })),
+        due: [{ title: 'Class Diagram Exercise', when: 'Tomorrow, 11:59 PM' }, { title: 'Use Case Diagram', when: 'Thursday, 5 PM' }, { title: 'ERD Revision', when: 'Friday, 11:59 PM' }] },
+    },
+  ];
+  const fillCopy = (tpl, d) => String(tpl).replace(/\{(\w+)\}/g, (_, k) => (d[k] == null ? '' : d[k]));
+
+  // How each layout draws itself at each size. Reads only what WIDGETS hands it (already-plain strings and numbers).
+  const WIDGET_LAYOUT = {
+    next(d, c, size) {
+      if (!d) return `<span class="wg-eyebrow">${ICON.step}${esc(c.eyebrow)}</span><b class="wg-title">${esc(c.empty)}</b><span class="wg-line">${esc(c.emptyHint)}</span>`;
+      const then = size === 'large' && d.then.length ? `<div class="wg-then"><span class="wg-sub">${esc(c.then)}</span><ol class="wg-path">${d.then.map((x) => `<li><b>${esc(x.title)}</b><span class="num">${esc(x.when)} · ${esc(x.dur)}</span></li>`).join('')}</ol></div>` : '';
+      return `<span class="wg-eyebrow">${ICON.step}${esc(c.eyebrow)}</span>
+        <b class="wg-title">${esc(d.title)}</b>
+        <span class="wg-line num">${esc(size === 'small' ? d.when : `${d.when} – ${d.range.split(' – ')[1]} · ${d.est ? '≈ ' : ''}${d.dur}`)}</span>
+        ${size !== 'small' ? `<span class="wg-chips">${d.context ? `<span class="wg-chip">${esc(d.context)}</span>` : ''}${d.due ? `<span class="wg-chip num">${esc(d.due)}</span>` : ''}${d.est ? '<span class="wg-chip">AI estimate</span>' : ''}</span>` : ''}${then}`;
+    },
+    today(d, c, size) {
+      if (!d) return `<span class="wg-eyebrow">${esc(c.eyebrow)}</span><b class="wg-title">${esc(c.none)}</b>`;
+      const head = d.leftLabel ? `<b class="wg-big num">${esc(d.leftLabel)}</b><span class="wg-line">${esc(c.left)}</span>` : `<b class="wg-title">${esc(d.total ? c.clear : c.none)}</b>`;
+      const bar = d.total ? `<span class="wg-bar" role="img" aria-label="${esc(fillCopy(c.count, d))}"><i style="width:${d.percent}%"></i></span>` : '';
+      const n = size === 'large' ? 6 : 2;
+      const rows = size !== 'small' && d.rows.length ? `<ul class="wg-rows">${d.rows.slice(0, n).map((r) => `<li class="${r.fixed ? 'is-fixed' : ''}"><span class="num">${esc(r.time)}</span><b>${esc(r.title)}</b>${r.fixed ? `<span class="wg-fixed">${ICON.lock}${esc(c.fixed)}</span>` : ''}</li>`).join('')}</ul>${d.rows.length > n ? `<span class="wg-sub num">+${d.rows.length - n} more</span>` : ''}` : '';
+      return `<div class="wg-col"><span class="wg-eyebrow">${esc(c.eyebrow)}</span>${head}${bar}<span class="wg-sub num">${esc(fillCopy(c.count, d))}</span></div>${rows ? `<div class="wg-col wg-grow">${rows}</div>` : ''}`;
+    },
+    week(d, c, size) {
+      if (!d) return `<span class="wg-eyebrow">${esc(c.eyebrow)}</span><b class="wg-title">Nothing planned yet</b>`;
+      const max = Math.max(60, ...d.days.map((x) => x.mins));
+      const days = `<div class="wg-days" role="img" aria-label="Planned work for each day of the week">${d.days.map((x) => `<span class="${x.today ? 'is-today' : x.past ? 'is-past' : ''}"><i style="height:${Math.round((x.mins / max) * 100)}%"></i><em>${esc(x.label)}</em></span>`).join('')}</div>`;
+      const verdict = `<span class="wg-chip ${d.fits ? 'ok' : 'warn'}">${d.fits ? ICON.check : ICON.hourglass}${esc(d.fits ? c.fits : c.tight)}</span>`;
+      const due = `<div class="wg-then"><span class="wg-sub">${esc(c.due)}</span>${d.due.length ? `<ul class="wg-rows">${d.due.map((x) => `<li><b>${esc(x.title)}</b><span class="num">${esc(x.when)}</span></li>`).join('')}</ul>` : `<span class="wg-line">${esc(c.none)}</span>`}</div>`;
+      return `<div class="wg-col"><span class="wg-eyebrow">${esc(c.eyebrow)}</span><b class="wg-big num">${d.percent}%</b>${size === 'small' ? `<span class="wg-line">${esc(c.of)}</span>` : ''}
+          <span class="wg-bar" role="img" aria-label="${d.percent}% ${esc(c.of)}"><i style="width:${d.percent}%"></i></span>${size !== 'small' ? `<span class="wg-sub num">${esc(fillCopy(c.line, d))}</span>${verdict}` : ''}</div>
+        ${size !== 'small' ? `<div class="wg-col wg-grow">${days}</div>` : ''}${size === 'large' ? due : ''}`;
+    },
+  };
+  function widgetSizes() {
+    const out = {};
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(WIDGET_PREF_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+    for (const w of WIDGETS) out[w.id] = WIDGET_SIZES.some(([v]) => v === saved[w.id]) ? saved[w.id] : w.defaultSize;
+    return out;
+  }
+  function saveWidgetSizes(sizes) { try { if (sizes) localStorage.setItem(WIDGET_PREF_KEY, JSON.stringify(sizes)); else localStorage.removeItem(WIDGET_PREF_KEY); } catch (e) { /* preview preference only */ } }
+  /** One widget's content. Never throws into the page: a widget that cannot read the plan shows its sample. */
+  function widgetBody(w, size) {
+    let d = null, sample = false;
+    try { d = w.data(state, now()); } catch (e) { d = null; }
+    if (d == null && w.sample && !state.plan.length && !state.tasks.some((t) => t.status !== 'done' && t.status !== 'cancelled')) { d = w.sample; sample = true; }
+    return { html: WIDGET_LAYOUT[w.layout](d, w.copy, size), sample };
+  }
+  function widgetItem(w, size) {
+    const b = widgetBody(w, size), label = WIDGET_SIZES.find(([v]) => v === size)[1];
+    return `
+      <section class="card wg-item" aria-labelledby="wg-${w.id}-title">
+        <div class="wg-head"><div><h2 id="wg-${w.id}-title">${esc(w.name)}</h2><p class="mc-desc">${esc(w.about)}</p></div>
+          <div class="seg" role="radiogroup" aria-label="${esc(w.name)} size">${WIDGET_SIZES.map(([v, l]) => `<button role="radio" aria-checked="${v === size}" class="${v === size ? 'on' : ''}" data-action="widgetSize" data-id="${w.id}" data-v="${v}">${l}</button>`).join('')}</div></div>
+        <div class="wg-stage"><div class="wg wg-${w.layout}" data-wg="${w.id}" data-size="${size}" role="group" aria-label="${esc(w.name)} widget, ${label.toLowerCase()} size">${b.html}</div></div>
+        <p class="small muted wg-note" data-wg-note="${w.id}">${label} size${b.sample ? ' · sample content, because your plan has nothing to show here yet' : ''}</p>
+      </section>`;
+  }
+  function widgetsView() {
+    const sizes = widgetSizes();
+    const changed = WIDGETS.some((w) => sizes[w.id] !== w.defaultSize);
+    return `
+      <div class="subview wide">
+      ${subHead('Widget previews', 'What SIKAD could show on a home screen. Pick a size for each one.')}
+      <div class="wg-tools"><p class="sample-note">${ICON.info}<span>Previews inside SIKAD. Nothing is installed on your phone, and your plan is not changed.</span></p>
+        <button class="btn small ghost" data-action="widgetReset" ${changed ? '' : 'disabled'}>Restore default sizes</button></div>
+      <div class="wg-gallery">${WIDGETS.map((w) => widgetItem(w, sizes[w.id])).join('')}</div>
+      </div>`;
+  }
+
+  // ================================================ NOTIFICATION PREVIEWS ==
+  // A phone drawn inside the page, showing how SIKAD's reminders could look and what their buttons would
+  // do. It is a simulator: no browser permission is asked for, nothing is sent to the device, and nothing
+  // is delivered while the app is closed.
+  //
+  // PROVISIONAL CONTENT. The five kinds live in NOTIFS: label, tone, icon, when it would fire, wording,
+  // the two buttons (`actions`: label + an id from NOTIF_ACTIONS), the data read from the plan (`data`,
+  // read-only; it also names the task or session the buttons act on) and the `sample` used when the plan
+  // has nothing that fits. Text in {braces} is filled from that data. A button marked `plain` does not use
+  // that data (it only opens a screen), so it also works on sample content. To change a notification, edit its
+  // entry here. To change what a button does, edit NOTIF_ACTIONS. The page itself does not change.
+  const NOTIFS = [
+    { id: 'next', label: 'Time to start', tone: 'info', icon: 'play', when: '10 minutes before a planned block begins.',
+      title: 'Up next: {task}', body: '{range} · {dur}.',
+      actions: [{ id: 'focus', label: 'Start focus' }, { id: 'task', label: 'View task' }],
+      data(st, n) { const x = E.nextSession(st.plan, n); return x ? { task: x.title, range: `${T.rel(x.start, n)}, ${T.range(x.start, x.end)}`, dur: T.dur(x.mins), taskId: x.taskId, sessionId: x.id } : null; },
+      sample: { task: 'Class Diagram Exercise', range: 'Today, 6:15 PM – 7:15 PM', dur: '1 hr' } },
+    { id: 'deadline', label: 'Deadline coming up', tone: 'warn', icon: 'clock', when: 'A task is due within a day and still has work left.',
+      title: '{task} is due {due}', body: '{left} of work is still planned. Your next block for it is {next}.',
+      actions: [{ id: 'task', label: 'View task' }, { id: 'adjust', label: 'Adjust schedule' }],
+      data(st, n) {
+        const t = st.tasks.filter((x) => x.deadline != null && x.deadline > n && x.status !== 'done' && x.status !== 'cancelled').sort((a, b) => a.deadline - b.deadline)[0];
+        if (!t) return null;
+        const s = st.plan.filter((x) => x.taskId === t.id && x.end > n).sort((a, b) => a.start - b.start)[0];
+        return { task: t.title, due: `${T.rel(t.deadline, n).toLowerCase()}, ${T.timeShort(t.deadline)}`, left: T.dur(S.taskRemaining(t)), next: s ? `${T.rel(s.start, n).toLowerCase()} at ${T.timeShort(s.start)}` : 'not planned yet', taskId: t.id };
+      },
+      sample: { task: 'Use Case Diagram', due: 'tomorrow, 5 PM', left: '1.5 hrs', next: 'today at 7:30 PM' } },
+    { id: 'risk', label: 'At risk today', tone: 'warn', icon: 'alert', when: 'A task planned today may not get finished today.',
+      title: '{task} is at risk today', body: '{reason}',
+      actions: [{ id: 'task', label: 'Review task' }, { id: 'adjust', label: 'Adjust schedule' }],
+      data() { const r = todayRisks().find((x) => x.level === 'risk' || x.level === 'high'); return r ? { task: r.title, reason: r.why, taskId: r.taskId } : null; },
+      sample: { task: 'Big-O Worksheet', reason: 'Today is tight: about 1 hr of room for 1 hr of work.' } },
+    { id: 'replan', label: 'Plan updated', tone: 'success', icon: 'check', when: 'SIKAD moved a block after something changed.',
+      title: 'Plan updated: {task} moved', body: 'From {from} to {to}. Fixed commitments did not change.',
+      actions: [{ id: 'schedule', label: 'Review schedule', plain: true }, { id: 'changes', label: 'View changes' }],
+      data(st, n) {
+        const c = st.lastUpdate && (st.lastUpdate.changes || []).find((x) => x.from && x.to);
+        return c ? { task: c.title, from: `${T.rel(c.from.start, n)} ${T.timeShort(c.from.start)}`, to: `${T.rel(c.to.start, n)} ${T.timeShort(c.to.start)}` } : null;
+      },
+      sample: { task: 'Subnetting Drill', from: 'Today 8 PM', to: 'Tomorrow 6 PM' } },
+    { id: 'short', label: 'Not enough time', tone: 'critical', icon: 'hourglass', when: 'Some work no longer fits before its deadline.',
+      title: 'Not enough time for {task}', body: '{dur} does not fit before {due}. Nothing was shortened or moved past the deadline.',
+      actions: [{ id: 'options', label: 'Review options' }, { id: 'affected', label: 'View affected tasks' }],
+      data(st, n) { const u = (st.unscheduled || []).find((x) => x.reason === 'no_time'); return u ? { task: u.title, dur: T.dur(u.mins), due: `${T.rel(u.deadline, n)}, ${T.timeShort(u.deadline)}`, taskId: u.taskId } : null; },
+      sample: { task: 'Reflection Paper', dur: '2 hrs', due: 'Tomorrow, 8 AM' } },
+  ];
+  /**
+   * What each notification button does. Every one leads to something that already exists in the app and
+   * goes through that feature's own checks and confirmations; none changes the plan by itself except
+   * Start focus, which starts a session exactly as the Start task button does.
+   * (d) → true when it went somewhere, or a sentence saying why it could not.
+   */
+  const leaveForApp = (tab) => { ui.returnTo = 'notifications'; ui.notif = null; ui.tab = tab; ui.sub = null; ui.focusOnly = false; ui.askMenu = false; };
+  const NOTIF_ACTIONS = {
+    focus(d) {
+      const x = d.sessionId && state.plan.find((p) => p.id === d.sessionId && p.end > now());
+      if (!x) return 'That block is no longer in your plan.';
+      if (state.active) return 'A focus session is already running. End it first.';
+      leaveForApp('home'); ui.dayView = 'today';
+      A.start({ id: x.id });
+      window.scrollTo(0, 0);
+      return true;
+    },
+    task(d) { if (!taskById(d.taskId)) return 'That task is no longer on your list.'; ui.notif = null; openTask(d.taskId); return true; },
+    adjust(d) { if (!taskById(d.taskId)) return 'That task is no longer on your list.'; ui.notif = null; openAdjust(d.taskId); return true; },   // the same recommended-time sheet as on Home
+    schedule() { leaveForApp('home'); A.viewSchedule(); return true; },
+    changes() {
+      if (!state.lastUpdate) return 'There is no recorded plan change to show right now.';
+      leaveForApp('home'); render(); window.scrollTo(0, 0);
+      const h = document.getElementById('upd-title'); if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); }
+      return true;
+    },
+    options() {
+      if (!(state.unscheduled || []).length) return 'Everything fits right now, so there are no options to review.';
+      leaveForApp('home'); render();
+      const el = document.getElementById('attention'); if (el) { el.scrollIntoView({ block: 'start', behavior: M.reduced() ? 'auto' : 'smooth' }); el.focus({ preventScroll: true }); }
+      return true;
+    },
+    affected() {
+      if (!(state.unscheduled || []).length) return 'No task is waiting for a slot right now.';
+      leaveForApp('tasks'); render(); window.scrollTo(0, 0);
+      return true;
+    },
+  };
+  /** → { title, body, sample, d } for one kind, from the plan when it has a fitting example, otherwise from the sample. */
+  function notifContent(nf) {
+    let d = null;
+    try { d = nf.data(state, now()); } catch (e) { d = null; }
+    const sample = d == null;
+    if (sample) d = nf.sample;
+    return { title: fillCopy(nf.title, d), body: fillCopy(nf.body, d), sample, d };
+  }
+  /** One notification as it would sit on a lock screen. Lives inside the phone; never outside it. */
+  function notifBanner() {
+    const nf = ui.notif && NOTIFS.find((x) => x.id === ui.notif.id);
+    if (!nf) return `<div class="ph-empty"><span aria-hidden="true">${ICON.bell}</span><b>No notifications</b><span>Pick a kind and tap Show on phone.</span></div>`;
+    const c = notifContent(nf), enter = ui.notif.fresh;
+    ui.notif.fresh = false;
+    return `
+      <article class="notif t-${nf.tone} ${enter ? 'is-entering' : ''}" role="status" aria-live="polite" id="notif-banner" aria-label="${esc(nf.label)} notification">
+        <header class="notif-app"><span class="notif-mark" aria-hidden="true">${ICON.mark}</span><b>SIKAD</b><span>now</span>${c.sample ? '<span class="chip">Sample</span>' : ''}
+          <button class="icon-btn" data-action="notifDismiss" aria-label="Dismiss notification">${ICON.close}</button></header>
+        <div class="notif-main"><span class="notif-icon" aria-hidden="true">${ICON[nf.icon] || ICON.bell}</span>
+          <div class="notif-text"><b>${esc(c.title)}</b><p>${esc(c.body)}</p></div></div>
+        <div class="notif-actions">${nf.actions.map((a) => `<button class="btn small" data-action="notifAct" data-act="${a.id}">${esc(a.label)}</button>`).join('')}</div>
+        ${ui.notif.note ? `<p class="notif-note" role="status">${ICON.info}<span>${esc(ui.notif.note)}</span></p>` : ''}
+      </article>`;
+  }
+  function notifPhone() {
+    const n = now(), p = T.parts(n);
+    return `
+      <div class="phone" role="group" aria-label="Simulated phone showing SIKAD notifications">
+        <div class="ph-screen">
+          <div class="ph-status" aria-hidden="true"><span class="num">${T.timeShort(n).replace(/ (AM|PM)/, '')}</span><span class="ph-notch"></span><span class="ph-sys"><i class="ph-signal"></i><i class="ph-batt"></i></span></div>
+          <div class="ph-lock"><span class="ph-date">${T.DAY_NAMES[p.dow]}, ${T.MONTHS[p.mo - 1]} ${p.d}</span><b class="ph-clock num">${T.time(n).replace(/ (AM|PM)/, '')}</b></div>
+          <div class="ph-stack">${notifBanner()}</div>
+          <span class="ph-home" aria-hidden="true"></span>
+        </div>
+      </div>`;
+  }
+  function notifsView() {
+    return `
+      <div class="subview wide">
+      ${subHead('Notification previews', 'See each reminder on a phone, and try its buttons.')}
+      <p class="sample-note">${ICON.info}<span>The phone is a drawing inside SIKAD, not your device. No permission is asked for and nothing is sent. A button on a notification opens the matching part of the app.</span></p>
+      <div class="nf-sim">
+        <div class="nf-phone">${notifPhone()}
+          <p class="small muted ph-cap"><span>Shows SIKAD's clock${T.shift ? ' (Demo clock)' : ''}.</span> <button class="text-link" data-action="notifDismiss" ${ui.notif ? '' : 'disabled'}>Clear the screen</button></p></div>
+        <ul class="nf-list" aria-label="Notification kinds">${NOTIFS.map((nf) => {
+          const c = notifContent(nf), on = ui.notif && ui.notif.id === nf.id;
+          return `<li class="card nf-item t-${nf.tone} ${on ? 'is-on' : ''}">
+            <span class="nf-icon" aria-hidden="true">${ICON[nf.icon] || ICON.bell}</span>
+            <div class="nf-text"><h2>${esc(nf.label)}${c.sample ? ' <span class="chip">Sample</span>' : ''}</h2>
+              <p class="nf-when"><b>When:</b> ${esc(nf.when)}</p>
+              <p class="nf-when"><b>Buttons:</b> ${nf.actions.map((a) => esc(a.label)).join(' · ')}</p></div>
+            <button class="btn small" data-action="notifShow" data-id="${nf.id}" aria-label="Show on phone: ${esc(nf.label)}" aria-pressed="${!!on}">Show on phone</button>
+          </li>`;
+        }).join('')}</ul>
+      </div>
+      </div>`;
+  }
+  /** After a notification button led into the app: one tap back to the simulator (browser Back works too). */
+  const returnBar = () => (ui.returnTo === 'notifications' && !(ui.tab === 'profile' && ui.sub === 'notifications')
+    ? `<p class="return-bar"><button class="back-link" data-action="notifReturn">${ICON.back}Notification previews</button><span class="small muted">You came from a test notification.</span></p>` : '');
 
   // ---------- Profile management views: the weekly baseline (classes + recurring commitments) ----------
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`;
@@ -1842,7 +2213,7 @@
   // ================================================================ SHEETS ==
   function sheet() {
     const sh = ui.sheet;
-    const inner = { dump: dumpSheet, proposal: proposalSheet, task: taskSheet, fixed: fixedSheet, engine: engineSheet, confirm: confirmSheet, import: importSheet, classForm: classFormSheet, commitForm: commitFormSheet }[sh.type]();
+    const inner = { dump: dumpSheet, proposal: proposalSheet, adjust: adjustSheet, task: taskSheet, fixed: fixedSheet, engine: engineSheet, confirm: confirmSheet, import: importSheet, classForm: classFormSheet, commitForm: commitFormSheet }[sh.type]();
     return `<div class="sheet-backdrop" data-action="backdrop"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
       <div class="sheet-grip" aria-hidden="true"></div><button class="icon-btn sheet-close" data-action="closeSheet" aria-label="Close">${ICON.close}</button>${inner}</div></div>`;
   }
@@ -1909,8 +2280,9 @@
     return `
       <div class="form">
         <label>Task name <span class="req">(required)</span><input value="${esc(f.title)}" data-bind="sheet.form.title" placeholder="e.g. IT 208 report" required aria-required="true"></label>
-        <label>Deadline<input type="datetime-local" value="${f.deadline != null ? T.toInput(f.deadline) : ''}" data-bind="sheet.form.deadline" data-type="dt"></label>
-        <label>Estimated duration (hours)<input type="number" min="0.25" step="0.25" value="${hrs(f.durationMins)}" data-bind="sheet.form.durationMins" data-type="hrs"></label>
+        ${dtField('sheet.form.deadline', f.deadline, { label: 'Deadline', hint: 'When it is due. Leave empty if you do not know yet.' })}
+        ${durField('sheet.form.durationMins', f.durationMins, { label: 'Time needed', hint: 'Leave both empty and SIKAD estimates it.' })}
+        ${dtField('sheet.form.pinnedStart', f.pinnedStart || null, { label: 'Start at (optional)', defTime: T.minsToHm(Math.min(23 * 60, T.ceilTo(now(), 60) / T.MIN % 1440)), hint: 'Ask for a time and other tasks move around it. Leave empty and SIKAD picks the slot.' })}
         <label>Priority (optional)<select data-bind="sheet.form.priority">${['high', 'medium', 'low'].map((p) => `<option value="${p}" ${p === f.priority ? 'selected' : ''}>${PRI_LABEL[p]}</option>`).join('')}</select></label>
         <label>Difficulty (optional)<select data-bind="sheet.form.difficulty">${S.DIFFICULTIES.map((p) => `<option value="${p}" ${p === (f.difficulty || 'medium') ? 'selected' : ''}>${DIFF_LABEL[p]}</option>`).join('')}</select></label>
         <label>Notes (optional)<textarea rows="2" data-bind="sheet.form.notes">${esc(f.notes)}</textarea></label>
@@ -1976,7 +2348,7 @@
       case 'partial': {
         const t = taskById(it.taskId); const left = t ? S.taskRemaining(t) : 0;
         return `<article class="review-card">${rcKind(ICON.check, 'Part finished', 'k-success')}<p><b>${esc(it.title)}</b> has no named steps, so tell me what is left. It currently shows ${T.dur(left)}.</p>
-          <label class="${it.remainingMins > 0 ? '' : 'needs-answer'}">Time still needed<span class="hrs-input"><input type="number" min="0.25" step="0.25" value="${it.remainingMins > 0 ? hrs(it.remainingMins) : ''}" data-bind="${p}.remainingMins" data-type="hrs" data-rerender> hrs</span></label></article>`;
+          ${durField(`${p}.remainingMins`, it.remainingMins > 0 ? it.remainingMins : null, { label: 'Time still needed', cls: it.remainingMins > 0 ? '' : 'needs-answer', rerender: true })}</article>`;
       }
       case 'event': {
         const e = it.event;
@@ -2045,7 +2417,7 @@
           <p>I can't write your ${esc(it.noun)}, since that's your work to own. But I can help you get it done without the overwhelm. Here's how I'd break it down:</p>
           <ol class="steps">${it.breakdown.map(([st, m]) => `<li>${esc(st)} <span class="muted num">(${m} min)</span></li>`).join('')}</ol>
           <label class="toggle"><input type="checkbox" ${it.addAsTask ? 'checked' : ''} data-bind="${p}.addAsTask" data-rerender> Schedule these steps into my free time</label>
-          ${it.addAsTask ? `<label class="${it.deadline == null ? 'needs-answer' : ''}">When is it due?<input type="datetime-local" value="${it.deadline != null ? T.toInput(it.deadline) : ''}" data-bind="${p}.deadline" data-type="dt" data-rerender></label>` : ''}
+          ${it.addAsTask ? dtField(`${p}.deadline`, it.deadline, { label: 'When is it due?', cls: it.deadline == null ? 'needs-answer' : '', rerender: true }) : ''}
         </article>`;
       case 'stress': {
         const cap = E.capacity(state, n0);
@@ -2204,8 +2576,8 @@
         <p class="small">SIKAD lets as few tasks as possible give way, starting with the lowest priority, and keeps everything else on time. The deadlines themselves are not changed, so check whether a late hand-in is allowed.</p>
         ${adj.stillUnfit.length ? `<p class="small">Still not fitting: ${adj.stillUnfit.map((x) => `${esc(x.title)} (${T.dur(x.mins)})`).join(', ')}.</p>` : ''}</div></div>` : '';
     return `
-      <h2 id="sheet-title" tabindex="-1">${adj ? 'A plan that fits' : 'Review the updated plan'}</h2>
-      <p class="sheet-sub">${adj ? 'You have more work than time before some deadlines. SIKAD adjusted the plan so all of it has a place. Nothing changes unless you accept.' : 'This is a proposal. Nothing is saved until you accept it.'}</p>
+      <h2 id="sheet-title" tabindex="-1">${adj ? 'A plan that fits' : ui.sheet.checkin ? 'Recommended schedule' : 'Review the updated plan'}</h2>
+      <p class="sheet-sub">${adj ? 'You have more work than time before some deadlines. SIKAD adjusted the plan so all of it has a place. Nothing changes unless you accept.' : ui.sheet.checkin ? 'This is a proposal. Nothing is saved until you accept it. If you keep your current plan, the question stays on Home.' : 'This is a proposal. Nothing is saved until you accept it.'}</p>
       ${adjustBlock}
       <p class="small">Because: ${esc(u.trigger)}</p>
       ${u.notes.map((x) => `<p class="small">${esc(x)}</p>`).join('')}
@@ -2218,10 +2590,66 @@
       <p class="small upd-fixed">${ICON.lock}<span>Fixed commitments unchanged${skipped ? ', except the one you chose to cancel or skip' : ''}.</span></p>
       ${next ? `<p class="small upd-next">${ICON.step}<span>Next would be: <b>${esc(next.title)}</b> · <span class="num">${T.rel(next.start, n)} ${T.timeShort(next.start)}</span></span></p>` : ''}
       <div class="sheet-actions">
-        <button class="btn" data-action="rejectProposal">${adj ? 'Keep my current plan' : 'Reject'}</button>
+        <button class="btn" data-action="rejectProposal">${adj ? 'Keep my current plan' : ui.sheet.checkin ? 'Keep current plan' : 'Reject'}</button>
         ${ui.sheet.review ? '<button class="btn ghost" data-action="editProposal">Edit</button>' : ''}
         ${ui.sheet.plain ? '<button class="btn ghost" data-action="plainProposal">Don\'t adjust</button>' : ''}
         <button class="btn primary" data-action="acceptProposal">Accept changes</button>
+      </div>`;
+  }
+
+  // ---------- Adjust schedule: a recommended time, or one the student picks ----------
+  // Opened from an "At risk today" or "Won't fit today" row. The recommendation comes from the placement
+  // engine (S.recommendAdjustment) and is pre-filled; the student may type another date and time. Either
+  // way the result is worked out on a copy of the plan (S.previewMove) and shown before anything is saved.
+  const whenFull = (ms) => `${T.rel(ms, now())}, ${T.time(ms)}`;
+  function openAdjust(id) {
+    const rec = S.recommendAdjustment(state, id);
+    if (!rec) return;
+    ui.sheet = { type: 'adjust', id, rec, start: rec.start != null ? rec.start : (rec.current ? rec.current.start : null) };
+    render();
+  }
+  function adjustSheet() {
+    const sh = ui.sheet, t = taskById(sh.id), rec = sh.rec;
+    if (!t || !rec) return '<p>Task not found.</p>';
+    const usingRec = rec.start != null && sh.start === rec.start;
+    const p = sh.start != null ? S.previewMove(state, sh.id, sh.start) : { ok: false, code: 'NO_TIME', message: 'Pick a date and a time.', alt: rec.start };
+    sh.draft = p.ok ? p.draft : null;
+    const same = !!(rec.current && sh.start === rec.current.start && !t.pinnedStart);
+    let body;
+    if (p.ok) {
+      const d = p.draft, u = d.lastUpdate, risk = E.completionConfidence(d, d.now).find((r) => r.taskId === t.id && r.show);
+      const short = d.status === 'INFEASIBLE' && (d.unscheduled || []).length > (state.unscheduled || []).length;
+      const wasRisk = new Set(todayRisks().filter((r) => r.level === 'risk' || r.level === 'high').map((r) => r.taskId));
+      const newRisk = E.completionConfidence(d, d.now).filter((r) => (r.level === 'risk' || r.level === 'high') && r.taskId !== t.id && !wasRisk.has(r.taskId));
+      body = `
+        ${u.notes.map((x) => `<p class="small">${esc(x)}</p>`).join('')}
+        <h3 class="list-h">What would change</h3>
+        ${u.changes.length ? `<ul class="changes on-sheet">${u.changes.map((c) => `<li>${changeLine(c)}</li>`).join('')}</ul>` : '<p class="small">Nothing moves: this is where it already is.</p>'}
+        ${risk ? `<div class="status-panel s-clarify" role="status">${ICON.alert}<div><b>${esc(risk.label)}, even at this time</b><p>${esc(risk.why || risk.reason)}</p></div></div>` : ''}
+        ${newRisk.length ? `<div class="status-panel s-clarify" role="status">${ICON.alert}<div><b>${newRisk.map((r) => esc(r.title)).join(', ')} would then be at risk today</b><p>${newRisk.length === 1 ? 'It takes' : 'They take'} the time this frees up today, and today is tight. You can still accept, or pick another time.</p></div></div>` : ''}
+        ${short ? `<div class="status-panel s-critical" role="status">${ICON.hourglass}<div><b>Not enough time</b><p>Not fitting with this time: ${(d.unscheduled || []).map((x) => `${esc(x.title)} (${T.dur(x.mins)})`).join(', ')}. Pick another time, or keep your current plan.</p></div></div>` : ''}
+        <p class="small upd-fixed">${ICON.lock}<span>Fixed commitments unchanged.</span></p>`;
+    } else {
+      body = `<div class="status-panel s-clarify" role="alert">${ICON.alert}<div><b>That time can't be used</b><p>${esc(p.message)}</p>
+        ${p.alt != null ? `<p>The closest time that works is <b class="num">${whenFull(p.alt)}</b>.</p><button class="btn small" data-action="adjustUse" data-start="${p.alt}">Use ${T.rel(p.alt, now())} ${T.timeShort(p.alt)}</button>` : '<p>No open time was found for it before its deadline. Change the time needed or the deadline in Task details.</p>'}</div></div>`;
+    }
+    return `
+      <h2 id="sheet-title" tabindex="-1">Adjust schedule</h2>
+      <p class="sheet-sub">A recommended time, worked out from your current plan. Nothing changes until you accept.</p>
+      <dl class="adj-facts num">
+        <div><dt>Task</dt><dd>${esc(t.title)}</dd></div>
+        <div><dt>Time still needed</dt><dd>${T.dur(rec.remainingMins)}${rec.mins !== rec.remainingMins ? ` (next step: ${T.dur(rec.mins)})` : ''}</dd></div>
+        <div><dt>Planned now</dt><dd>${rec.current ? `${whenFull(rec.current.start)} – ${T.time(rec.current.end)}` : 'Not planned'}</dd></div>
+        <div><dt>Due</dt><dd>${t.deadline != null ? `${T.short(t.deadline)}, ${T.time(t.deadline)}` : 'Not set'}</dd></div>
+      </dl>
+      <div class="status-panel adj-rec" role="status">${ICON.step}<div><b>${rec.start != null ? `Recommended: <span class="num">${whenFull(rec.start)}</span>` : 'No better time found'}</b><p>${esc(rec.reason)}</p>
+        ${rec.start != null ? `<button class="btn small" data-action="adjustUse" data-start="${rec.start}" ${usingRec ? 'disabled' : ''}>${usingRec ? `${ICON.check} Using recommended time` : 'Use recommended time'}</button>` : ''}</div></div>
+      <div class="form">${dtField('sheet.start', sh.start, { label: 'Start at', rerender: true, defTime: T.timeInput(rec.start != null ? rec.start : T.ceilTo(now(), 60)), hint: 'Choose another time if you prefer. The plan below is worked out again.' })}</div>
+      ${body}
+      <div class="sheet-actions">
+        <button class="btn" data-action="closeSheet">Keep current plan</button>
+        <button class="btn ghost" data-action="openTask" data-id="${t.id}">Task details</button>
+        <button class="btn primary" data-action="acceptAdjust" ${p.ok && !same ? '' : 'disabled'}>Accept changes</button>
       </div>`;
   }
 
@@ -2241,19 +2669,21 @@
     const sh = ui.sheet, d = sh.d, t = taskById(sh.id);
     if (!t) return '<p>Task not found.</p>';
     const sessions = state.plan.filter((s) => s.taskId === t.id);
-    const others = state.tasks.filter((x) => x.id !== t.id && x.status !== 'done' && x.status !== 'cancelled');
+    // A task that already waits on this one (directly or through others) is not offered: two tasks must never wait on each other.
+    const waitsOn = (x, id, seen = new Set()) => (x.dependencies || []).some((dep) => dep === id || (!seen.has(dep) && seen.add(dep) && taskById(dep) && waitsOn(taskById(dep), id, seen)));
+    const others = state.tasks.filter((x) => x.id !== t.id && x.status !== 'done' && x.status !== 'cancelled' && !waitsOn(x, t.id));
     const p = 'sheet.d';
     return `
       <h2 id="sheet-title" tabindex="-1">Task details</h2>
       <p class="sheet-sub">Everything here is your call. Saving recalculates the plan.</p>
       <div class="form">
         <label>Task name<input value="${esc(d.title)}" data-bind="${p}.title"></label>
+        ${durField(`${p}.total`, d.total, { label: 'Time needed', extra: d.isAiEstimate ? ' ' + estChip() : '', est: d.isAiEstimate, estPath: `${p}.isAiEstimate`, hint: 'How long the whole task takes. SIKAD never shortens this.' })}
+        ${dtField(`${p}.deadline`, d.deadline, { label: 'Deadline', hint: 'When it is due. Changing it does not pick a time to work on it.' })}
+        ${dtField(`${p}.pinnedStart`, d.pinnedStart || null, { label: 'Start at (optional)', defTime: T.minsToHm(Math.min(23 * 60, T.ceilTo(now(), 60) / T.MIN % 1440)), hint: 'Asks SIKAD to plan the work at this time. Leave empty and SIKAD picks the slot.' })}
         <div class="grid2">
-          <label>Deadline<input type="datetime-local" value="${d.deadline != null ? T.toInput(d.deadline) : ''}" data-bind="${p}.deadline" data-type="dt"></label>
-          <label>Time needed ${d.isAiEstimate ? estChip() : ''}<span class="hrs-input ${d.isAiEstimate ? 'is-est' : ''}">${d.isAiEstimate ? '<span aria-hidden="true">≈</span>' : ''}<input type="number" min="0.25" step="0.25" value="${hrs(d.total)}" data-bind="${p}.total" data-type="hrs"> hrs</span></label>
           <label>Priority<select data-bind="${p}.priority">${['high', 'medium', 'low'].map((x) => `<option value="${x}" ${x === d.priority ? 'selected' : ''}>${PRI_LABEL[x]}</option>`).join('')}</select></label>
           <label>Difficulty<select data-bind="${p}.difficulty">${S.DIFFICULTIES.map((x) => `<option value="${x}" ${x === d.difficulty ? 'selected' : ''}>${DIFF_LABEL[x]}</option>`).join('')}</select></label>
-          <label>Schedule at (optional)<input type="datetime-local" value="${d.pinnedStart ? T.toInput(d.pinnedStart) : ''}" data-bind="${p}.pinnedStart" data-type="dt"></label>
         </div>
         <label class="toggle"><input type="checkbox" ${d.doFirst ? 'checked' : ''} data-bind="${p}.doFirst"> Do this first (overrides SIKAD's priority)</label>
         ${d.parts.length ? `<fieldset><legend>Steps</legend>${d.parts.map((x, i) => `
@@ -2271,14 +2701,33 @@
 
   function saveTask() {
     const sh = ui.sheet, d = sh.d, t = taskById(sh.id);
+    // Check everything first: a refused value never changes the task.
+    const el = (path, part) => document.getElementById(fieldId(path) + part);
+    const n = now();
+    if (!d.title.trim()) { flagField($sheet.querySelector('[data-bind="sheet.d.title"]'), 'Task name is missing. Type a short name.'); return; }
+    if (durError(d.total)) { flagField(el('sheet.d.total', '-h'), durError(d.total)); return; }
+    for (const [path, label] of [['sheet.d.deadline', 'deadline'], ['sheet.d.pinnedStart', 'start time']]) {   // a date typed without a usable time, or the reverse
+      const dEl = el(path, '-d'), tEl = el(path, '-t');
+      if (dEl && tEl && (dEl.value || tEl.value) && T.joinInput(dEl.value, tEl.value) == null) { flagField(dEl.value ? tEl : dEl, `The ${label} needs both a date and a time.`); return; }
+    }
+    if (d.deadline != null && d.deadline !== t.deadline && Math.abs(d.deadline - n) > 366 * T.DAY) { flagField(el('sheet.d.deadline', '-d'), 'That deadline is more than a year away from today. Check the date.'); return; }
+    const pin = d.pinnedStart || null;
+    if (pin !== (t.pinnedStart || null) && pin != null) {
+      // The same check every requested start goes through (store.js checkStart): past, outside the day,
+      // after the deadline, or into a fixed commitment. A refused time is explained, with the closest one that works.
+      const firstPart = (t.parts || []).find((x) => !x.done && x.remainingMins > 0);
+      const left = firstPart ? firstPart.remainingMins : Math.max(5, S.taskRemaining(t) + (d.total - S.taskTotal(t)));
+      const v = S.checkStart(state, { mins: left, deadline: d.deadline, lateOk: t.lateOk && d.deadline === t.deadline }, pin);
+      if (!v.ok) { flagField(el('sheet.d.pinnedStart', v.code === 'PAST' && T.dayStart(pin) < T.dayStart(n) ? '-d' : '-t'), `${v.message}${v.alt != null ? ` The closest time that works is ${whenFull(v.alt)}.` : ''}`); return; }
+    }
     snapshot('Edit task');
     const changes = [];
     if (d.title.trim() && d.title !== t.title) { t.title = d.title.trim(); changes.push('renamed'); }
-    if (d.deadline !== t.deadline) { t.deadline = d.deadline; changes.push('deadline'); }
+    if (d.deadline !== t.deadline) { t.deadline = d.deadline; t.lateOk = false; changes.push('deadline'); }   // a new deadline ends an earlier "may finish late" agreement
     if (d.priority !== t.priority) { t.priority = d.priority; changes.push('priority'); }
     if (S.DIFFICULTIES.includes(d.difficulty) && d.difficulty !== (t.difficulty || 'medium')) { t.difficulty = d.difficulty; changes.push('difficulty'); }
     if (d.doFirst !== !!t.doFirst) { t.doFirst = d.doFirst; changes.push(d.doFirst ? 'do first' : 'normal priority'); }
-    if ((d.pinnedStart || null) !== (t.pinnedStart || null)) { t.pinnedStart = d.pinnedStart || null; changes.push('time pinned'); }
+    if (pin !== (t.pinnedStart || null)) { t.pinnedStart = pin; if (pin != null) { t.notBefore = null; (t.parts || []).forEach((x) => { x.notBefore = null; }); } changes.push(pin != null ? 'start time set' : 'start time cleared'); }
     t.notes = d.notes;
     d.parts.forEach((p, i) => {
       const tp = t.parts[i];
@@ -2540,7 +2989,7 @@
     },
 
     // --- navigation
-    tab(ds) { if (ui.tab === ds.tab && !ui.askMenu && !ui.sub) { window.scrollTo(0, 0); return; } ui.tab = ds.tab; ui.sub = null; ui.focusOnly = false; ui.askMenu = false; render(); window.scrollTo(0, 0); },
+    tab(ds) { if (ui.tab === ds.tab && !ui.askMenu && !ui.sub) { window.scrollTo(0, 0); return; } ui.tab = ds.tab; ui.sub = null; ui.notif = null; ui.returnTo = null; ui.focusOnly = false; ui.askMenu = false; render(); window.scrollTo(0, 0); },
     dayView(ds) { ui.dayView = ds.v; render(); },
     pickDay(ds) { ui.weekDay = Number(ds.day); render(); },
     // data-v: -1 previous week, 1 next week, 0 back to this week. The arrows keep the same weekday selected.
@@ -2659,8 +3108,8 @@
     },
     focusSavePartial() {
       const input = document.getElementById('focus-left');
-      const mins = Math.round(Number(input.value) * 60);
-      if (!(mins > 0)) { flagField(input, 'Enter how much time is still needed, e.g. 0.5 for half an hour.'); return; }
+      const mins = T.joinDur(input.value, (document.getElementById('focus-left-m') || {}).value);
+      if (!(mins > 0)) { flagField(input, 'Enter how much time is still needed, in hours and minutes.'); return; }
       endFocusSession('partial', mins);
     },
     done(ds) {
@@ -2678,20 +3127,46 @@
       render();
       toast(moved ? `Moved "${s.title}" to ${T.rel(moved.start, now())} ${T.timeShort(moved.start)}.` : `"${s.title}" no longer fits before its deadline — see the alert.`, { undo: true });
     },
-    checkinDone(ds) {
+    // --- check-ins: a block ended without a report
+    ckDone(ds) {
+      const c = state.checkins.find((x) => x.ck === ds.ck);
+      if (!c) return;
       snapshot('Check-in');
-      S.completeSession(state, ds.id);
+      S.checkinDone(state, ds.ck);
+      ui.ckPartial = null;
       render();
       toast('Logged as done. Plan adjusted.', { undo: true });
     },
-    checkinNo(ds) { S.dismissCheckin(state, ds.id); render(); },
+    ckPartial(ds) { ui.ckPartial = ds.ck; ui.ckLeft = null; render(); const i = document.getElementById('ck-left-h'); if (i) i.focus({ preventScroll: true }); },
+    ckPartialBack() { ui.ckPartial = null; ui.ckLeft = null; render(); },
+    ckPartialSave(ds) {
+      const h = document.getElementById('ck-left-h'), m = document.getElementById('ck-left-m');
+      const mins = T.joinDur(h && h.value, m && m.value);
+      if (!(mins >= 5 && mins <= 40 * 60)) { flagField(h, mins === 0 ? 'If nothing is left, tap Back and choose Completed.' : 'Enter how much time is still needed, from 5 minutes to 40 hours.'); return; }
+      ui.ckLeft = mins;
+      checkinProposal(ds.ck, 'partial', mins);
+    },
+    ckNotDone(ds) { checkinProposal(ds.ck, 'not'); },
+    // older names, kept working: "Yes, done" and "Not yet" on a check-in saved by an earlier version
+    checkinDone(ds) { const c = state.checkins.find((x) => x.id === ds.id); if (c) A.ckDone({ ck: c.ck }); },
+    checkinNo(ds) { const c = state.checkins.find((x) => x.id === ds.id); if (c) A.ckNotDone({ ck: c.ck }); },
+    autoUndo(ds) {
+      const rec = (state.autoDone || []).find((r) => r.id === ds.id);
+      if (!rec) return;
+      snapshot('Not finished');
+      const r = S.undoAutoDone(state, ds.id);
+      render();
+      toast(r ? `"${rec.title}" is back in your plan.` : `"${rec.title}" was already finished by you, so it stays done.`, { undo: !!r });
+    },
+    autoAck() { S.ackAutoDone(state); render(); },
     setDeadline(ds) {
-      const el = document.getElementById('dl-' + ds.id);
-      const v = el && T.fromInput(el.value);
-      if (!v) { flagField(el, 'No date picked yet. Choose the due date and time, then tap Schedule it.'); return; }
+      const el = document.getElementById('dl-' + ds.id), tEl = document.getElementById('dl-' + ds.id + '-t');
+      if (!el || !el.value) { flagField(el, 'No date picked yet. Choose the due date, then tap Schedule it.'); return; }
+      const v = T.joinInput(el.value, (tEl && tEl.value) || '23:59');
+      if (v == null) { flagField(tEl || el, 'That is not a date and time I can use.'); return; }
       snapshot('Deadline');
       const t = taskById(ds.id);
-      t.deadline = v;
+      t.deadline = v; t.lateOk = false;
       S.replan(state, `Deadline set: ${t.title} → ${T.short(v)}`);
       render();
       planToast();
@@ -2731,7 +3206,7 @@
       draft.engineLog = state.engineLog;
       state = draft;
       ui.overloadSig = overloadSig();
-      ui.dumpDraft = null; ui.dict = null;
+      ui.dumpDraft = null; ui.dict = null; ui.ckPartial = null;
       ui.sheet = null; ui.tab = 'home'; ui.focusOnly = false;
       render();
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2740,7 +3215,7 @@
     rejectProposal() { ui.sheet = null; ui.dumpDraft = null; ui.overloadSig = overloadSig(); render(); toast('No changes were made. Your plan is as it was.'); },
     suggestAdjust() { ui.overloadSig = overloadSig(); if (offerAdjustment(false)) render(); },
     adjustProposal() { const plain = ui.sheet.draft; if (offerAdjustment(false, ui.sheet)) { ui.sheet.plain = plain; render(); } },
-    plainProposal() { ui.sheet = { type: 'proposal', draft: ui.sheet.plain, review: ui.sheet.review }; render(); },
+    plainProposal() { ui.sheet = { type: 'proposal', draft: ui.sheet.plain, review: ui.sheet.review, checkin: !ui.sheet.review }; render(); },
     editProposal() { ui.sheet = ui.sheet.review; render(); },
     scrollAttention() { const el = document.getElementById('attention'); if (el) { el.scrollIntoView({ block: 'start' }); el.focus({ preventScroll: true }); } },
     dumpEdit() { ui.sheet.mode = 'input'; render(); },
@@ -2759,10 +3234,24 @@
     saveManual() {
       const f = ui.sheet.form;
       if (!f.title.trim()) { flagField(document.querySelector('[data-bind="sheet.form.title"]'), 'Task name is missing. Type a short name, e.g. "IT 208 report".'); return; }
-      snapshot('Manual task');
+      if (f.durationMins != null && durError(f.durationMins)) { flagField(document.getElementById(fieldId('sheet.form.durationMins') + '-h'), durError(f.durationMins)); return; }
       const { type, est } = P.classify(f.title);
-      const task = S.makeTask(state, { title: P.titleCase(f.title.trim()), type, deadline: f.deadline, durationMins: f.durationMins || est,
-        isAiEstimate: !f.durationMins, priority: f.priority, difficulty: f.difficulty, notes: f.notes, parts: P.suggestParts(type, f.durationMins || est) });
+      const spec = { title: P.titleCase(f.title.trim()), type, deadline: f.deadline, durationMins: f.durationMins || est,
+        isAiEstimate: !f.durationMins, priority: f.priority, difficulty: f.difficulty, notes: f.notes, parts: P.suggestParts(type, f.durationMins || est) };
+      for (const [path, label] of [['sheet.form.deadline', 'deadline'], ['sheet.form.pinnedStart', 'start time']]) {   // a date without a time, or the reverse
+        const dEl = document.getElementById(fieldId(path) + '-d'), tEl = document.getElementById(fieldId(path) + '-t');
+        if (dEl && tEl && (dEl.value || tEl.value) && T.joinInput(dEl.value, tEl.value) == null) { flagField(dEl.value ? tEl : dEl, `The ${label} needs both a date and a time.`); return; }
+      }
+      if (f.pinnedStart != null) {                         // a requested start is checked before anything is added
+        const tEl = document.getElementById(fieldId('sheet.form.pinnedStart') + '-t');
+        if (f.deadline == null) { flagField(tEl, 'Add the deadline too. A start time alone does not tell SIKAD when the work is due.'); return; }
+        const first = (spec.parts || []).filter((x) => x.mins > 0)[0];
+        const v = S.checkStart(state, { mins: first ? first.mins : spec.durationMins, deadline: f.deadline }, f.pinnedStart);
+        if (!v.ok) { flagField(tEl, `${v.message}${v.alt != null ? ` The closest time that works is ${whenFull(v.alt)}.` : ''}`); return; }
+      }
+      snapshot('Manual task');
+      const task = S.makeTask(state, spec);
+      if (f.pinnedStart != null) task.pinnedStart = f.pinnedStart;
       state.tasks.push(task);
       ui.sheet = null; ui.formDraft = null;
       S.replan(state, `New task: ${task.title}`, { notes: task.deadline == null ? [`"${task.title}" needs a deadline before it can be scheduled.`] : [] });
@@ -2781,6 +3270,20 @@
 
     // --- tasks
     openTask(ds) { openTask(ds.id); },
+    // --- Adjust schedule: recommended time, or another one, previewed on a copy
+    adjustTask(ds) { openAdjust(ds.id); },
+    adjustUse(ds) { if (!ui.sheet || ui.sheet.type !== 'adjust') return; ui.sheet.start = Number(ds.start); render(); },
+    acceptAdjust() {
+      const sh = ui.sheet, draft = sh && sh.type === 'adjust' && sh.draft;
+      if (!draft) return;
+      snapshot('Adjust schedule');
+      draft.engineLog = state.engineLog;
+      state = draft;                                       // one step: the whole worked-out plan, or nothing
+      ui.overloadSig = overloadSig();
+      ui.sheet = null;
+      render();
+      planToast();
+    },
     newTask() { ui.sheet = { type: 'dump', mode: 'input', input: 'form', text: ui.dumpDraft || '', form: ui.formDraft || null }; render(); },
     saveTask() { saveTask(); },
     completeTask() {
@@ -2833,8 +3336,52 @@
     },
 
     // --- Profile management views (weekly baseline)
-    profileOpen(ds) { ui.sub = SUBS.includes(ds.sub) ? ds.sub : null; render(); window.scrollTo(0, 0); focusHeading(); },
-    profileBack() { const from = ui.sub; ui.sub = null; render(); window.scrollTo(0, 0); const b = document.querySelector(`[data-action="profileOpen"][data-sub="${from}"]`); if (b) b.focus({ preventScroll: true }); },
+    profileOpen(ds) { ui.sub = SUBS.includes(ds.sub) ? ds.sub : null; ui.notif = null; ui.returnTo = null; render(); window.scrollTo(0, 0); focusHeading(); },
+    // --- widget and notification previews (read the plan, never change it)
+    widgetSize(ds) {
+      const w = WIDGETS.find((x) => x.id === ds.id);
+      if (!w || !WIDGET_SIZES.some(([v]) => v === ds.v)) return;
+      const sizes = widgetSizes(); sizes[w.id] = ds.v; saveWidgetSizes(sizes);
+      // Resize in place so the frame can ease to its new size; a full render would rebuild it at the new size at once.
+      const el = document.querySelector(`[data-wg="${w.id}"]`);
+      if (!el) { render(); return; }
+      const b = widgetBody(w, ds.v), label = WIDGET_SIZES.find(([v]) => v === ds.v)[1];
+      el.dataset.size = ds.v; el.innerHTML = b.html; el.setAttribute('aria-label', `${w.name} widget, ${label.toLowerCase()} size`);
+      el.closest('.wg-item').querySelectorAll('[data-action="widgetSize"]').forEach((btn) => { const on = btn.dataset.v === ds.v; btn.classList.toggle('on', on); btn.setAttribute('aria-checked', String(on)); });
+      const note = document.querySelector(`[data-wg-note="${w.id}"]`);
+      if (note) note.textContent = `${label} size${b.sample ? ' · sample content, because your plan has nothing to show here yet' : ''}`;
+      const reset = document.querySelector('[data-action="widgetReset"]');
+      if (reset) reset.disabled = !WIDGETS.some((x) => sizes[x.id] !== x.defaultSize);
+    },
+    widgetReset() { saveWidgetSizes(null); render(); toast('Widget sizes are back to their defaults.'); },
+    notifShow(ds) {
+      if (!NOTIFS.some((x) => x.id === ds.id)) return;
+      ui.notif = { id: ds.id, fresh: true };
+      render();
+      const again = document.querySelector(`[data-action="notifShow"][data-id="${ds.id}"]`);
+      if (again) again.focus({ preventScroll: true });
+      const phone = document.querySelector('.phone');
+      if (phone && phone.getBoundingClientRect().top < 0) phone.scrollIntoView({ block: 'start', behavior: M.reduced() ? 'auto' : 'smooth' });
+    },
+    notifDismiss() {
+      const id = ui.notif && ui.notif.id;
+      ui.notif = null; render();
+      const b = id && document.querySelector(`[data-action="notifShow"][data-id="${id}"]`);
+      if (b) b.focus({ preventScroll: true });
+    },
+    /** A button on the simulated notification. Sample content never opens or changes anything in the real plan. */
+    notifAct(ds) {
+      const nf = ui.notif && NOTIFS.find((x) => x.id === ui.notif.id), fn = NOTIF_ACTIONS[ds.act];
+      const a = nf && nf.actions.find((x) => x.id === ds.act);
+      if (!nf || !fn || !a) return;
+      const c = notifContent(nf);
+      const res = c.sample && !a.plain ? 'This is sample content: your plan has nothing for this button to open right now.' : fn(c.d);
+      if (res === true) return;                            // the action rendered its destination
+      ui.notif = { id: nf.id, fresh: false, note: res };
+      render();
+    },
+    notifReturn() { ui.returnTo = null; ui.sheet = null; ui.tab = 'profile'; ui.sub = 'notifications'; ui.focusOnly = false; render(); window.scrollTo(0, 0); focusHeading(); },
+    profileBack() { const from = ui.sub; ui.sub = null; ui.notif = null; render(); window.scrollTo(0, 0); const b = document.querySelector(`[data-action="profileOpen"][data-sub="${from}"]`); if (b) b.focus({ preventScroll: true }); },
     accToggle(ds) { const d = Number(ds.d); ui.accOpen[d] = !ui.accOpen[d]; ui.accJust = ui.accOpen[d] ? d : null; render(); ui.accJust = null; },
     formDay(ds) { const f = ui.sheet.form, d = Number(ds.d); f.days = f.days.includes(d) ? f.days.filter((x) => x !== d) : f.days.concat(d).sort((a, c) => dayRank(a) - dayRank(c)); ui.sheet.dayError = false; render(); },
     formSet(ds) { ui.sheet.form[ds.k] = ds.v; render(); },
@@ -2955,14 +3502,17 @@
     const real = T.now();
     if (real !== state.now) {
       const newDay = T.dayStart(real) !== T.dayStart(state.now);
-      const hadCheckins = state.checkins.length;
-      // A running focus session is never ended by the clock; the student ends it.
-      if (!state.onboarded || state.active) state.now = real;
+      const had = new Set(state.checkins.map((c) => c.ck));
+      // Time passing completes nothing. A block that ended without a report becomes a check-in (store.js).
+      // A running focus session is never ended by the clock; other blocks that pass meanwhile are still noted.
+      if (!state.onboarded) state.now = real;
+      else if (state.active) { state.now = real; S.noteMissed(state); }
       else S.setClock(state, real);
+      const fresh = state.checkins.filter((c) => !had.has(c.ck));
       if (newDay) { ui.dayView = 'today'; ui.weekDay = null; ui.weekStart = null; }
-      if (newDay || state.checkins.length > hadCheckins) undoSnap = null;
+      if (newDay || fresh.length || state.checkins.length < had.size) undoSnap = null;   // an older Undo would drop or revive a question
       clockDirty = true;
-      if (!quiet && state.checkins.length > hadCheckins) toast('A session ended without "Done". Check in on the Home tab.');
+      if (!quiet && fresh.length && !state.active) toast(fresh.length === 1 ? `Your scheduled time for "${fresh[0].title}" has ended. How did it go? Answer on Home.` : `${fresh.length} scheduled blocks have ended. Say how they went on Home.`);
     }
     if (quiet || !clockDirty) return;
     if (midEntry()) { persist(); return; }
@@ -3073,6 +3623,8 @@
   document.addEventListener('input', (e) => {
     const el = e.target;
     clearFieldError(el);
+    if (el.dataset.dur) { bindDur(el, false); return; }
+    if (el.dataset.dtpart) return;                       // dates and times are read when the field is committed (change)
     if (el.dataset.bind && el.type !== 'checkbox' && el.tagName !== 'SELECT' && !['datetime-local', 'time'].includes(el.type)) {
       setPath(ui, el.dataset.bind.replace(/^ob\./, 'ob.'), convert(el));
       if (el.dataset.est) setPath(ui, el.dataset.est, false);
@@ -3082,6 +3634,11 @@
 
   document.addEventListener('change', (e) => {
     const el = e.target;
+    if (el.dataset.dur || el.dataset.dtpart) {
+      if (el.dataset.dur) bindDur(el, true); else bindDt(el);
+      if (el.dataset.rerender !== undefined) render();
+      return;
+    }
     if (el.dataset.bind) {
       setPath(ui, el.dataset.bind, convert(el));
       if (el.dataset.est) setPath(ui, el.dataset.est, false);
@@ -3117,6 +3674,7 @@
     }
     if (e.key === 'Escape' && ui.sheet) A.closeSheet();
     else if (e.key === 'Escape' && ui.askMenu) A.askMenuClose();
+    else if (e.key === 'Escape' && ui.notif) A.notifDismiss();
     else if (e.key === 'Escape' && document.body.classList.contains('spotlight')) A.spotlightOff();
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ui.sheet && ui.sheet.type === 'dump' && ui.sheet.mode === 'input') A.processDump();
   });

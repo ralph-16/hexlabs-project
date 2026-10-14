@@ -50,8 +50,10 @@
         start: T.at(dayMs, r.start), end: T.at(dayMs, r.end), fixed: true, source: 'baseline' });
     }
     for (const e of state.events) {
-      if (T.dayStart(e.start) !== dayMs) continue;
-      items.push({ id: e.id, refId: e.id, kind: e.kind, title: e.title, start: e.start, end: e.end, fixed: true, source: 'temporary' });
+      // A one-time commitment that runs past midnight blocks its hours on both days (each day shows its own part).
+      if (e.end <= dayMs || e.start >= dayMs + DAY) continue;
+      if (T.dayStart(e.start) !== dayMs && e.end - e.start > DAY) continue;   // never more than the night it belongs to
+      items.push({ id: e.id, refId: e.id, kind: e.kind, title: e.title, start: Math.max(e.start, dayMs), end: Math.min(e.end, dayMs + DAY), fixed: true, source: 'temporary' });
     }
     const ftf = items.filter((i) => i.kind === 'class' && i.mode === 'FTF').sort((a, c) => a.start - c.start);
     if (ftf.length && b.commuteMins > 0) {
@@ -104,7 +106,9 @@
         cursor = Math.max(cursor, be);
         prevBusy = true;
       }
-      pushGap(cursor, de, prevBusy, false);
+      // A commitment that begins right at (or just after) the end of the day still gets its gap before it.
+      const tail = busy.find(([bs]) => bs >= de && bs < de + buf);
+      pushGap(cursor, tail ? tail[0] : de, prevBusy, !!tail);
     }
     return slots;
   }
@@ -124,19 +128,25 @@
   /** A task (or each pending part of it) becomes a schedulable unit. */
   function units(state) {
     const out = [];
+    // Minutes of a block that ended without a report wait for the student's answer (store.js check-ins):
+    // they are not placed again until then, so nothing is moved or credited behind the student's back.
+    const held = new Map();
+    for (const c of state.checkins || []) held.set(c.unitId, (held.get(c.unitId) || 0) + c.mins);
+    const open = (id, mins) => Math.max(0, mins - (held.get(id) || 0));
     for (const t of state.tasks) {
       if (t.status === 'done' || t.status === 'cancelled') continue;
       const mk = (p, seq) => ({
         id: p ? `${t.id}:${p.id}` : t.id, taskId: t.id, partId: p ? p.id : null,
         title: p ? `${t.title} — ${p.title}` : t.title, taskTitle: t.title, partTitle: p ? p.title : null,
-        mins: p ? p.remainingMins : t.remainingMins, deadline: t.deadline, priority: t.priority,
+        mins: open(p ? `${t.id}:${p.id}` : t.id, p ? p.remainingMins : t.remainingMins), deadline: t.deadline, priority: t.priority,
         difficulty: diffOf(t), lateOk: !!t.lateOk && t.deadline != null, doFirst: !!t.doFirst, notBefore: Math.max(t.notBefore || 0, (p && p.notBefore) || 0),
         pinnedStart: seq === 0 ? t.pinnedStart || null : null, seq, deps: t.dependencies || [],
       });
       if (t.parts && t.parts.length) {
-        t.parts.filter((p) => !p.done && p.remainingMins > 0).forEach((p, i) => out.push(mk(p, i)));
+        t.parts.filter((p) => !p.done && p.remainingMins > 0).forEach((p, i) => { const u = mk(p, i); if (u.mins > 0) out.push(u); });
       } else if (t.remainingMins > 0) {
-        out.push(mk(null, 0));
+        const u = mk(null, 0);
+        if (u.mins > 0) out.push(u);
       }
     }
     return out;
@@ -286,40 +296,83 @@
       }
     }
 
-    // 2. Keep still-valid sessions from the previous plan where they are.
-    if (prevPlan && prevPlan.length) {
-      const prevBy = new Map();
-      for (const s of prevPlan) {
-        if (!prevBy.has(s.unitId)) prevBy.set(s.unitId, []);
-        prevBy.get(s.unitId).push(s);
+    const prevBy = new Map();
+    for (const s of prevPlan || []) {
+      if (!prevBy.has(s.unitId)) prevBy.set(s.unitId, []);
+      prevBy.get(s.unitId).push(s);
+    }
+    for (const list of prevBy.values()) list.sort((a, b) => a.start - b.start);
+    const prevStart = (u) => (prevBy.has(u.id) ? prevBy.get(u.id)[0].start : null);
+    /** This unit's sessions from the previous plan, if they are all still valid and still free. → { prev, trial } | null */
+    const keepable = (u, pred) => {
+      if (u.lateOk) return null;   // agreed-late work is always re-placed, to be as little late as possible
+      const prev = prevBy.get(u.id) || [];
+      if (!prev.length || sum(prev, (s) => s.mins) !== u.mins) return null;
+      if (prev.some((s) => s.end <= now)) return null;
+      if (busy && prev[0].start < from && !prev.some((s) => s.id === activeId)) return null;
+      if (u.notBefore && prev[0].start < u.notBefore) return null;
+      if (u.deadline > now && !u.lateOk && last(prev).end > u.deadline) return null;
+      if (u.pinnedStart && prev[0].start !== u.pinnedStart) return null;
+      if (!pred.ok || (pred.end && prev[0].start < pred.end)) return null;
+      let trial = slots;
+      for (const s of prev) {
+        const fs = Math.max(s.start, from);
+        if (fs >= s.end) continue;
+        if (!containedIn(trial, fs, s.end)) return null;
+        trial = reserve(trial, fs, s.end, buf);
       }
+      return { prev, trial };
+    };
+    const take = (u, chunks) => { for (const c of chunks) slots = reserve(slots, c.start, c.end, buf); placed.set(u.id, chunks); };
+    const freshFor = (u, pred) => findPlacement(slots, u.mins, Math.max(from, u.notBefore || 0, pred.end ? pred.end + buf : 0),
+      u.deadline > now && !u.lateOk ? u.deadline : null, buf, u.difficulty === 'hard');
+
+    // 1a. A focus session that is running keeps its block, whatever else is being re-placed.
+    if (activeId) {
+      const u = ordered.find((x) => !placed.has(x.id) && (prevBy.get(x.id) || []).some((s) => s.id === activeId));
+      const k = u && keepable(u, predecessorEnd(u));
+      if (k) { slots = k.trial; placed.set(u.id, k.prev.map((s) => ({ start: s.start, end: s.end }))); }
+    }
+
+    // 1b. Overdue unfinished work takes the earliest real slot BEFORE anything from the previous plan is
+    //     kept, so it is never left queued behind sessions that only hold their place for stability.
+    //     Skipped in a rescue, where overdue work goes last on purpose.
+    if (!opts.rescue) {
       for (const u of ordered) {
-        if (placed.has(u.id) || u.lateOk) continue;   // agreed-late work is always re-placed, to be as little late as possible
-        const prev = (prevBy.get(u.id) || []).slice().sort((a, b) => a.start - b.start);
-        if (!prev.length || sum(prev, (s) => s.mins) !== u.mins) continue;
-        if (prev.some((s) => s.end <= now)) continue;
-        if (busy && prev[0].start < from && !prev.some((s) => s.id === activeId)) continue;
-        if (u.notBefore && prev[0].start < u.notBefore) continue;
-        if (u.deadline > now && !u.lateOk && last(prev).end > u.deadline) continue;
-        if (u.pinnedStart && prev[0].start !== u.pinnedStart) continue;
+        if (placed.has(u.id) || !(u.deadline <= now)) continue;
         const pred = predecessorEnd(u);
-        if (!pred.ok || (pred.end && prev[0].start < pred.end)) continue;
-        let trial = slots, ok = true;
-        for (const s of prev) {
-          const fs = Math.max(s.start, from);
-          if (fs >= s.end) continue;
-          if (!containedIn(trial, fs, s.end)) { ok = false; break; }
-          trial = reserve(trial, fs, s.end, buf);
-        }
-        if (!ok) continue;
-        slots = trial;
-        placed.set(u.id, prev.map((s) => ({ start: s.start, end: s.end })));
+        if (!pred.ok) continue;
+        const chunks = freshFor(u, pred);
+        if (chunks) take(u, chunks);
       }
     }
 
-    // 3. Everything else, in priority order (dependencies may defer a unit to a later pass).
-    let pending = ordered.filter((u) => !placed.has(u.id));
+    // 2. One pass in rank order (deadline first, difficulty second). A unit keeps its sessions from the
+    //    previous plan when they are still valid, unless that would hold it behind lower-ranked work it
+    //    can go ahead of. Otherwise it takes the earliest open slot before its deadline. A lower-ranked
+    //    session that loses its slot this way is placed again in its own turn: later today if it fits,
+    //    else the next day with room, so one change carries across as many days as it needs to.
     const unscheduled = [];
+    let pending = [];
+    ordered.forEach((u, idx) => {
+      if (placed.has(u.id)) return;
+      const pred = predecessorEnd(u);
+      if (!pred.ok) { pending.push(u); return; }   // waits for its dependency (step 3)
+      const k = prevBy.size ? keepable(u, pred) : null;
+      if (k) {
+        const behind = ordered.slice(idx + 1).some((v) => v.taskId !== u.taskId && !placed.has(v.id) && prevStart(v) != null && prevStart(v) < k.prev[0].start);
+        const sooner = behind ? freshFor(u, pred) : null;
+        if (sooner && sooner[0].start < k.prev[0].start && last(sooner).end <= last(k.prev).end) { take(u, sooner); return; }
+        slots = k.trial;
+        placed.set(u.id, k.prev.map((s) => ({ start: s.start, end: s.end })));
+        return;
+      }
+      const chunks = freshFor(u, pred);
+      if (!chunks) { failed.add(u.id); unscheduled.push({ unit: u, reason: 'no_time' }); return; }
+      take(u, chunks);
+    });
+
+    // 3. Units that were waiting on a dependency, in priority order (repeated until nothing more can be placed).
     let progress = true;
     while (pending.length && progress) {
       progress = false;
@@ -327,13 +380,12 @@
       for (const u of pending) {
         const pred = predecessorEnd(u);
         if (!pred.ok) { next.push(u); continue; }
-        const earliest = Math.max(from, u.notBefore || 0, pred.end ? pred.end + buf : 0);
-        const latest = u.deadline > now && !u.lateOk ? u.deadline : null;
-        const chunks = findPlacement(slots, u.mins, earliest, latest, buf, u.difficulty === 'hard');
+        const k = prevBy.size ? keepable(u, pred) : null;
         progress = true;
+        if (k) { slots = k.trial; placed.set(u.id, k.prev.map((s) => ({ start: s.start, end: s.end }))); continue; }
+        const chunks = freshFor(u, pred);
         if (!chunks) { failed.add(u.id); unscheduled.push({ unit: u, reason: 'no_time' }); continue; }
-        for (const c of chunks) slots = reserve(slots, c.start, c.end, buf);
-        placed.set(u.id, chunks);
+        take(u, chunks);
       }
       pending = next;
     }
@@ -506,36 +558,50 @@
       let reason = `${T.dur(room)} of usable time left today for about ${T.dur(g.mins)} of work${queued ? `, after ${queued} other task${queued === 1 ? '' : 's'}` : ''}.`;
       if (late && room >= g.mins * 1.5) reason = `Its planned start (${T.time(g.start)}) has passed and it is not started yet.`;
       else if (diffOf(t) === 'hard' && ratio >= 1.5) reason = `It is marked hard and has ${T.dur(room)} of usable time for about ${T.dur(g.mins)} of work.`;
-      out.push({ taskId: t.id, title: t.title, level, percent, show: level !== 'ok', label: level === 'ok' ? null : 'At risk', reason,
+      // What the student is shown: a status, what is happening, why (only causes the numbers above support), and
+      // what to do. The percentage stays internal: it decides WHETHER to warn, never what the warning says.
+      const after = queued ? ` after the ${queued === 1 ? 'task' : `${queued} tasks`} planned before it` : '';
+      const whyParts = [room < g.mins
+        ? `You have about ${T.dur(room)} of usable time left today${after}, but it needs about ${T.dur(g.mins)}.`
+        : `You have about ${T.dur(room)} of usable time left today${after} for about ${T.dur(g.mins)} of work, which leaves little room to spare.`];
+      if (late) whyParts.push(`Its planned start (${T.time(g.start)}) has passed and it is not started yet.`);
+      if (diffOf(t) === 'hard') whyParts.push('It is marked hard, so it may take longer than planned.');
+      if (t.isAiEstimate) whyParts.push('Its time is an estimate.');
+      out.push({ taskId: t.id, title: t.title, level, percent, show: level !== 'ok', label: level === 'ok' ? null : 'At risk today', reason,
+        what: level === 'ok' ? null : 'This task may not fit today.', why: level === 'ok' ? null : whyParts.join(' '), next: level === 'ok' ? null : 'adjust',
         usableMins: room, neededMins: g.mins, dueToday: t.deadline != null && T.dayStart(t.deadline) === today });
       ahead += g.mins + buf; queued += 1;
     }
 
-    // Work that left today in the last replan, or is due today but only planned later.
-    const moved = new Map();
-    const lu = state.lastUpdate;
-    if (lu && T.dayStart(lu.at) === today) {
-      for (const c of lu.changes || []) if (c.action === 'RESCHEDULE' && c.from && c.to && T.dayStart(c.from.start) === today && T.dayStart(c.to.start) > today) moved.set(c.title, c.to.start);
-    }
+    // Work that was planned for today and has since been moved to a later day, or is due today but only
+    // planned later. "Was planned for today" is read from the saved record of the day (store.js day snapshots),
+    // not from the last change, so the status does not vanish when the Plan updated card is dismissed.
+    const movedToday = new Set((((state.daySnapshots || {})[T.key(today)] || {}).blocks || []).filter((b) => b.movedAt).map((b) => b.taskId));
     const firstByTask = new Map();
     for (const p of (state.plan || []).slice().sort((a, b) => a.start - b.start)) if (!firstByTask.has(p.taskId)) firstByTask.set(p.taskId, p);
     for (const [taskId, p] of firstByTask) {
       const t = tasksById.get(taskId);
       if (!t || byTask.has(taskId) || T.dayStart(p.start) <= today) continue;
-      const wasToday = [...moved.keys()].some((title) => title === p.title || title === t.title);
+      // A day or time the student chose themselves is their decision, not something left to fix.
+      if (t.pinnedStart || (t.notBefore && T.dayStart(t.notBefore) > today)) continue;
+      const wasToday = movedToday.has(taskId);
       const dueNow = t.deadline != null && T.dayStart(t.deadline) <= today;
       if (!wasToday && !dueNow) continue;
       const mins = sum((state.plan || []).filter((x) => x.taskId === taskId), (x) => x.mins);
       out.push({ taskId, title: t.title, level: 'wont_fit', percent: null, show: true, label: "Won't fit today",
         reason: `About ${T.dur(mins)} of work is left and today has ${T.dur(Math.max(0, usable - ahead))} of usable time${queued ? ' after the tasks ahead of it' : ' left'}. It is planned for ${T.short(p.start)} at ${T.time(p.start)}${t.deadline != null && t.deadline > now ? ', before its deadline' : ''}.`,
+        what: "This task won't fit today, but it has a later slot.", next: 'adjust',
+        why: `About ${T.dur(mins)} of work is left and today has ${T.dur(Math.max(0, usable - ahead))} of usable time${queued ? ' after the tasks ahead of it' : ' left'}${Math.max(0, usable - ahead) >= mins ? `, which is not enough once the ${buf}-minute gaps around tasks and fixed commitments are counted` : ''}. It is planned for ${T.short(p.start)} at ${T.time(p.start)}${t.deadline != null && t.deadline > now ? ', which is still before its deadline' : ''}.`,
         usableMins: Math.max(0, usable - ahead), neededMins: mins, movedTo: p.start, dueToday: dueNow });
     }
-    // No valid slot before the deadline: this always wins over any percentage.
+    // No valid slot before the deadline: this always wins over any internal score.
     for (const u of state.unscheduled || []) {
       if (u.reason !== 'no_time' || out.some((x) => x.taskId === u.taskId && x.level === 'infeasible')) continue;
       const i = out.findIndex((x) => x.taskId === u.taskId);
-      const entry = { taskId: u.taskId, title: u.title, level: 'infeasible', percent: null, show: true, label: 'Not enough time before the deadline',
+      const entry = { taskId: u.taskId, title: u.title, level: 'infeasible', percent: null, show: true, label: 'Not enough time before deadline',
         reason: `About ${T.dur(u.mins)} of work has no open block before ${u.deadline != null ? T.short(u.deadline) + ' ' + T.time(u.deadline) : 'its deadline'}.`,
+        what: 'This task cannot fit before its deadline.', next: 'options',
+        why: `About ${T.dur(u.mins)} of work has no open block before ${u.deadline != null ? T.short(u.deadline) + ' ' + T.time(u.deadline) : 'its deadline'}. Nothing was shortened and the deadline was not changed.`,
         usableMins: 0, neededMins: u.mins, dueToday: u.deadline != null && T.dayStart(u.deadline) === today };
       if (i >= 0) out[i] = entry; else out.push(entry);
     }
@@ -636,7 +702,8 @@
   }
 
   function eventConflicts(state, ev) {
-    const occs = occurrences(state, T.dayStart(ev.start)).filter((o) => o.start < ev.end && o.end > ev.start && o.id !== ev.id);
+    const days = [T.dayStart(ev.start)]; if (T.dayStart(ev.end - 1) > days[0]) days.push(days[0] + DAY);   // an overnight commitment is checked on both days
+    const occs = days.flatMap((d) => occurrences(state, d)).filter((o) => o.start < ev.end && o.end > ev.start && o.id !== ev.id);
     return { hard: occs.filter((o) => !o.soft), soft: occs.filter((o) => o.soft) };
   }
 

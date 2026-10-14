@@ -64,6 +64,25 @@
     toInput(ms) { return new Date(ms).toISOString().slice(0, 16); },
     fromInput(s) { return s ? T.fromISO(s) : null; },
     key(ms) { return new Date(ms).toISOString().slice(0, 10); },
+    // Form fields: a date input ("YYYY-MM-DD"), a time input ("HH:MM"), and a duration as hours + minutes.
+    // Built from the digits the student typed, never through the device timezone, so 2:35 PM stays 2:35 PM.
+    dateInput(ms) { return ms == null ? '' : T.key(ms); },
+    timeInput(ms) { return ms == null ? '' : new Date(ms).toISOString().slice(11, 16); },
+    /** → wall-clock ms, or null when the date is missing or either part is not a real date/time. */
+    joinInput(date, time) {
+      const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || ''), t = /^(\d{2}):(\d{2})/.exec(time || '');
+      if (!d || !t || +t[1] > 23 || +t[2] > 59) return null;
+      const ms = Date.UTC(+d[1], +d[2] - 1, +d[3], +t[1], +t[2]);
+      return T.key(ms) === date ? ms : null;   // rejects 2026-02-31 and the like
+    },
+    splitDur(mins) { mins = Math.max(0, Math.round(mins || 0)); return { h: Math.floor(mins / 60), m: mins % 60 }; },
+    /** Hours and minutes as typed ('' allowed for either) → whole minutes, or null when both are empty or not numbers. */
+    joinDur(h, m) {
+      if ((h === '' || h == null) && (m === '' || m == null)) return null;
+      const hv = h === '' || h == null ? 0 : Number(h), mv = m === '' || m == null ? 0 : Number(m);
+      if (!isFinite(hv) || !isFinite(mv) || hv < 0 || mv < 0) return null;
+      return Math.round(hv * 60 + mv);
+    },
 
     time(ms) {
       const { h, mi } = T.parts(ms);

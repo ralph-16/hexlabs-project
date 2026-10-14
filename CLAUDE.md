@@ -1,8 +1,9 @@
 # SIKAD build rules
 
 Stack: vanilla HTML/CSS/JS PWA. No frameworks, libraries, build step, npm packages, or new fonts/colors outside design.md tokens.
-Source of truth: `design.md` (+ `motion-spec.md`). Audit: `SIKAD-UIUX-AUDIT-REPORT_v3.md`.
+Source of truth: `design.md` (+ `motion-spec.md`). Audit: `SIKAD-UIUX-AUDIT-REPORT_v3.md`. How the system works and where things are: `system_codebase_summary.md`.
 Scope: UI/UX. Never change engine.js / parser.js behavior or JSON contracts. store.js: no changes EXCEPT the additive ones named in Batch 10 and Batch 11. Keep every existing `data-action` name working.
+Exception (14 Oct 2026 prompt, see process-log.md): narrow changes to engine.js (placement order; minutes waiting on a check-in are not placed) and to store.js (check-ins, `setClock`, snooze clears a pin) were authorized, as were narrow parser.js fixes for E2, E3, E4, E7 and E11 in errors.md. Exports and JSON contracts are unchanged; the rule above still applies to anything else.
 Design rules to keep: one primary (Butter) button per view; protected items show lock + "Fixed"; AI estimates show ≈ + "AI estimate"; every replan shows before → after + Undo; the student always decides.
 
 ## Product vs prototype
