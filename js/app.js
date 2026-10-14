@@ -2331,7 +2331,7 @@
     const actionable = sh.items.some((it) => it.include && !['stress', 'unclear', 'duplicate', 'next', 'refuse'].includes(it.kind)) ||
       sh.items.some((it) => it.kind === 'refuse' && it.addAsTask);
     return `
-      <h2 id="sheet-title">Here's what changed</h2>
+      <h2 id="sheet-title">${sh.items.every((it) => it.kind === 'refuse' || it.kind === 'stress') && !actionable ? 'Here\'s what I can do' : 'Here\'s what changed'}</h2>
       <blockquote class="quote">“${esc(sh.text)}”</blockquote>
       ${sh.items.some((it) => it.kind === 'task' && it.task.isAiEstimate) ? estLegend() : ''}
       <div class="review-list">${answerFirst(sh.items).map(([it, n]) => reviewItem(it, n)).join('')}</div>
@@ -2366,6 +2366,15 @@
       <p>${body}</p>
       <div class="chips" role="radiogroup" aria-labelledby="${qid}">${options.map(([v, label]) => choice(n, 'resolve', it.resolution, v, label)).join('')}</div>
       <p class="small">SIKAD never skips a class or shift on its own. It only does that if you choose it here.</p></div>`;
+  }
+
+  /** A refused request that names a task already in the plan: point at its planned sessions instead of adding it again. */
+  function refusePlanned(it) {
+    const t = taskById(it.taskId), ss = state.plan.filter((s) => s.taskId === it.taskId).sort((a, b) => a.start - b.start);
+    const due = t && t.deadline != null ? ` It's due ${T.short(t.deadline)}, ${T.time(t.deadline)}.` : ' It has no deadline yet. Add one so I can schedule it.';
+    const when = ss.length ? `“${esc(it.subject)}” has ${ss.length} session${ss.length === 1 ? '' : 's'} planned, the next ${T.rel(ss[0].start, now()).toLowerCase()} ${T.range(ss[0].start, ss[0].end)}. Work through these steps in those sessions.`
+      : `“${esc(it.subject)}” has no time planned yet.`;
+    return `<p class="small rc-note num">${when}${due} Nothing was changed.</p>`;
   }
 
   function reviewItem(it, n) {
@@ -2449,10 +2458,10 @@
       }
       case 'refuse':
         return `<article class="review-card neutral">
-          <p>I can't write your ${esc(it.noun)}, since that's your work to own. But I can help you get it done without the overwhelm. Here's how I'd break it down:</p>
+          <p>I can't ${it.taskId ? `complete “${esc(it.subject)}” for you to submit` : `write your ${esc(it.noun)}`}, since that's your work to own. But I can help you get it done without the overwhelm. Here's how I'd break it down:</p>
           <ol class="steps">${it.breakdown.map(([st, m]) => `<li>${esc(st)} <span class="muted num">(${m} min)</span></li>`).join('')}</ol>
-          <label class="toggle"><input type="checkbox" ${it.addAsTask ? 'checked' : ''} data-bind="${p}.addAsTask" data-rerender> Schedule these steps into my free time</label>
-          ${it.addAsTask ? dtField(`${p}.deadline`, it.deadline, { label: 'When is it due?', cls: it.deadline == null ? 'needs-answer' : '', rerender: true }) : ''}
+          ${it.taskId ? refusePlanned(it) : `<label class="toggle"><input type="checkbox" ${it.addAsTask ? 'checked' : ''} data-bind="${p}.addAsTask" data-rerender> Schedule these steps into my free time</label>
+          ${it.addAsTask ? dtField(`${p}.deadline`, it.deadline, { label: 'When is it due?', cls: it.deadline == null ? 'needs-answer' : '', rerender: true }) : ''}`}
         </article>`;
       case 'stress': {
         const cap = E.capacity(state, n0);
@@ -2477,13 +2486,18 @@
         if (i.recurring) return { kind: 'recurring', include: true, event: i.event, conflicts: E.recurringConflicts(state, i.event), resolution: null };
         return { kind: 'event', include: true, event: Object.assign({}, i.event), conflicts: E.eventConflicts(state, i.event), resolution: null, makeRecurring: false, durationEstimated: i.durationEstimated };
       case 'cancel_occurrence': return { kind: 'cancel_occurrence', include: true, occurrences: i.occurrences };
-      case 'refuse': return { kind: 'refuse', include: true, noun: i.noun, subject: i.subject, breakdown: i.breakdown, addAsTask: false, deadline: null };
+      case 'refuse': return { kind: 'refuse', include: true, noun: i.noun, subject: i.subject, breakdown: i.breakdown, taskId: i.taskId || null, addAsTask: false, deadline: null };
       default: return Object.assign({ kind: i.type, include: true }, i);
     }
   }
 
   function processDump(text) {
     const parsed = P.parse(text, S.parseContext(state));
+    // Intent before title matching: a request to do graded work is refused even when it names a planned task.
+    if (Assistant.isGraded(text)) parsed.intents = [Assistant.gradedIntent(state, S.parseContext(state), text)];
+    // "I have three assignments due this week" next to stress describes the load; it is not a new task to add.
+    if (parsed.intents.some((i) => i.type === 'stress')) parsed.intents = parsed.intents.filter((i) => !(i.type === 'task' && i.task.deadline == null &&
+      /^(?:(?:a|two|three|four|five|six|several|many|so many|lots of|a lot of|too many|\d+)\s+)?(?:more\s+)?(?:assignments?|tasks?|deadlines?|things|exams?|projects?|subjects?|requirements?)$/i.test(i.task.title)));
     S.log(state, 'Phase 2 · Brain dump', text, P.toPhase2(parsed));
     const items = parsed.intents.map(intentToItem);
     // Record the clarification/conflict outcome as a Phase 3 response, as the LLM contract would.

@@ -46,9 +46,78 @@
     return null;
   }
 
+  // ------------------------------------------------- Scope: checked before any question rule or task-title match
+  // SIKAD plans time. It does not do graded work, answer unrelated questions or counsel. These rules run first so a
+  // matching task title can never turn "solve my Logic exercises for me" into a task update.
+  const SCOPE = {
+    safety: /\b(?:kill(?:ing)? myself|suicid\w*|end(?:ing)? my life|end it all|(?:want|wanna|going) to die|don'?t want to (?:live|be alive|be here|wake up)|hurt(?:ing)? myself|self[- ]?harm\w*|cut(?:ting)? myself|no reason to live|better off dead|overdos\w*|(?:i'?m|i am) (?:in danger|not safe)|(?:i )?don'?t feel safe|someone (?:is )?(?:hurting|threatening|following) me)\b/i,
+    gradedAsk: /\b(?:can|could|would|will) you\b|\bfor me\b|^\s*(?:please\s+)?(?:solve|answer)\b/i,
+    gradedVerb: /\b(?:solve|answer|write|do|complete|finish|draft|code|translate|paraphrase)\b/i,
+    gradedWork: /\b(?:essays?|papers?|reports?|homework|assignments?|exercises?|questions?|problems?|thesis|lab|worksheets?|quiz(?:zes)?|exams?|tests?|answers?|solutions?|pdf|project|code|program|reflection)\b/i,
+    gradedDirect: /\b(?:give|send|show|tell|get) me (?:the |all (?:the )?)?(?:answers?|solutions?)\b|\banswer key\b|\banswers?\b.*\b(?:to submit|for submission|to hand in|to turn in|to pass)\b|\b(?:to submit|for submission|to hand in|to turn in)\b.*\banswers?\b/i,
+    planning: /\b(?:schedule|plan|move|fit|block|reschedule|remind|time (?:to|for)|break (?:it|this|them)|split|when should|deadline|due)\b/i,
+    stress: /\b(?:overwhelm\w*|stress(?:ed|ing)?|anxious|anxiety|panick?(?:ing|ed)?|burn(?:ed|t)? ?out|burnout|break ?down|breaking down|can'?t (?:cope|handle (?:this|it))|exhausted|drowning|freaking out|depressed|hopeless|falling apart)\b/i,
+    deadlines: /\b(?:assignments?|deadlines?|due|tasks?|exams?|quiz(?:zes)?|projects?|homework|tests?|papers?|essays?)\b/i,
+    question: /\?\s*$|^\s*(?:who|what|whats|what's|where|when|why|how|which|is|are|can|could|do|does|did|tell me|explain|define|teach)\b/i,
+    chat: /^\s*(?:hi|hello|hey|yo|good (?:morning|afternoon|evening)|thanks?|thank you|how are you|who are you|what are you|tell me (?:a joke|something)|let'?s (?:talk|chat))\b/i,
+    onTopic: /\b(?:task|plan|schedul\w*|deadline|due|time|free|busy|class|classes|shift|work|study|session|exam|quiz|assignment|homework|project|today|tonight|tomorrow|week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|hours?|minutes?|mins?|hrs?|focus|snooze|done|finish\w*|priority|commitment|calendar|busy|late|early|move|add|remove|delete|rename|mark|change|cancel)\b/i,
+  };
+  const scopeReply = (kind, title, lines, facts) => ({ kind, scope: true, title, lines, facts: facts || [] });
+
+  function scopeCheck(state, text) {
+    if (SCOPE.safety.test(text)) {
+      return scopeReply('safety', 'Please reach out to someone now', [
+        'This sounds serious, and it matters more than any plan. SIKAD is a planner and can\'t help with this, but people can.',
+        'If you might be in danger, call your local emergency number now. Talk to someone you trust today: a family member, a friend, or your school\'s guidance office.',
+        'Your plan will keep. Nothing was changed.']);
+    }
+    if (SCOPE.stress.test(text) && !SCOPE.deadlines.test(text) && !SCOPE.onTopic.test(text)) {
+      // Distress with no deadline or command in it. Stress about deadlines goes to the parser's stress card instead.
+      const next = answerNext(state);
+      const lines = ['Sorry it\'s a hard stretch. SIKAD only plans time; for how you\'re feeling, someone you trust or your school\'s guidance office can help more than I can.'];
+      if (next.missing) lines.push(...next.lines);
+      else lines.push(`If it helps to keep today small: your next step is "${next.title}". You can Snooze anything that can wait and SIKAD will find it a later slot.`);
+      lines.push('Nothing was changed.');
+      return scopeReply('stress', 'Let\'s keep today manageable', lines, next.missing ? [] : next.facts);
+    }
+    return null;
+  }
+
+  /** A request to do graded work for the student, whatever task title it names. */
+  function isGraded(text) {
+    return SCOPE.gradedDirect.test(text) ||
+      (SCOPE.gradedAsk.test(text) && SCOPE.gradedVerb.test(text) && SCOPE.gradedWork.test(text) && !SCOPE.planning.test(text));
+  }
+
+  /**
+   * The parser's own academic-guardrail intent (refusal + step breakdown) for a graded-work request, built from a
+   * plain request for the same kind of work so the parser's rules stay the only source of the breakdown.
+   * A named task is kept on the intent so the card does not offer to add it a second time.
+   */
+  function gradedIntent(state, ctx, text) {
+    const kinds = text.match(/\b(essay|paper|homework|assignment|report|thesis|worksheet|code|program|quiz|exam|test|reflection|proposal|lab)\b/i);
+    const own = text.match(SCOPE.gradedWork);
+    const noun = kinds ? kinds[1].toLowerCase() : own ? own[0].toLowerCase() : 'work';
+    const ref = P.parse(`Can you do my ${kinds ? noun : 'problems'} for me`, Object.assign({}, ctx, { tasks: [] })).intents.find((i) => i.type === 'refuse');
+    const r = P.resolveTask(text, state.tasks);
+    return Object.assign({}, ref, { noun, subject: r.task ? r.task.title : ref.subject, taskId: r.task ? r.task.id : null });
+  }
+
+  /** After the planning rules: a question or chat with nothing about time, tasks or the plan in it is out of scope. */
+  function offTopic(state, text) {
+    if (!SCOPE.chat.test(text) && !SCOPE.question.test(text)) return null;
+    if (SCOPE.onTopic.test(text) || !P.resolveTask(text, state.tasks).none) return null;
+    return scopeReply('offtopic', 'SIKAD only helps with your time', [
+      'I can\'t answer that. I plan your tasks, deadlines and free time.',
+      'Try "What should I work on next?", "How much free time do I have tomorrow?", or tell me about a new task.'], []);
+  }
+
   function answer(state, text) {
+    const scoped = scopeCheck(state, text || '');
+    if (scoped) return scoped;
+    if (isGraded(text || '')) return null;                    // the caller shows the academic-guardrail card
     const kind = classify(text || '');
-    if (!kind) return null;
+    if (!kind) return offTopic(state, text || '');
     return { next: answerNext, why: answerWhy, usable: answerUsable, feasible: answerFeasible, list: answerList, inspect: answerInspect, whatif: answerWhatIf }[kind](state, text);
   }
 
@@ -236,5 +305,5 @@
       facts: [['Sessions that move', String((u.changes || []).filter((c) => c.action === 'RESCHEDULE').length)], ['Fits', draft.status === 'INFEASIBLE' ? 'No' : 'Yes']] };
   }
 
-  root.TempoAssistant = { answer, classify };
+  root.TempoAssistant = { answer, classify, isGraded, gradedIntent };
 })(typeof window !== 'undefined' ? window : globalThis);
