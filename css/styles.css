@@ -1422,3 +1422,8 @@ body.spotlight .focus { z-index: 36; }
 .status-panel.adj-rec { background: var(--sage-tint); border-color: var(--line); }
 .status-panel.adj-rec > svg { color: var(--forest); }
 .status-panel .btn { margin-top: 8px; }
+
+/* ---------- early-finish suggestion: a quiet card in the flow of Home ---------- */
+.status-card.offer { background: var(--sage-tint); border-color: var(--line); }
+.status-card.offer .sc-head > svg { color: var(--forest); }
+.status-card.offer .btn:not(.ghost) { background: var(--surface); }

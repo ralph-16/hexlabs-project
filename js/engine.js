@@ -20,6 +20,7 @@
   const MIN_SESSION = 30;   // shortest session worth scheduling when splitting
   const MAX_SESSION = 120;  // longer work is split into focused sessions
   const FRAGMENT_MIN = 15;  // free fragments shorter than this are discarded
+  const COMPACT_MIN = 30;   // a session is pulled into an earlier gap only if it gains at least this much (or a whole day)
   const PRIORITY_LEAD = { high: 36 * HOUR, medium: 12 * HOUR, low: 0 };
   const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
   const DIFFICULTY_RANK = { hard: 0, medium: 1, easy: 2 };   // unknown difficulty counts as medium (the documented default)
@@ -360,9 +361,28 @@
       if (!pred.ok) { pending.push(u); return; }   // waits for its dependency (step 3)
       const k = prevBy.size ? keepable(u, pred) : null;
       if (k) {
-        const behind = ordered.slice(idx + 1).some((v) => v.taskId !== u.taskId && !placed.has(v.id) && prevStart(v) != null && prevStart(v) < k.prev[0].start);
+        // Rank order: a task held behind lower-ranked work it could go ahead of is moved up. Both sessions are
+        // still valid, so this is an OPTIONAL improvement: it runs after a change the student made, never in a
+        // settled replan (an early finish, a clock tick, a reload), where moving work earlier needs their yes.
+        const behind = !opts.settled && ordered.slice(idx + 1).some((v) => v.taskId !== u.taskId && !placed.has(v.id) && prevStart(v) != null && prevStart(v) < k.prev[0].start);
         const sooner = behind ? freshFor(u, pred) : null;
         if (sooner && sooner[0].start < k.prev[0].start && last(sooner).end <= last(k.prev).end) { take(u, sooner); return; }
+        // COMPACTION (only when the student changed something, never on a clock tick). A session moves into
+        // an earlier gap when the gap is truly empty: free of fixed commitments, buffers, and every session
+        // other tasks still hold from the previous plan, so nothing is displaced and no new risk is created.
+        // It must be worth it: an earlier day, or at least COMPACT_MIN earlier, finishing no later, in no
+        // more sittings. A time the student asked for is never compacted.
+        if (opts.compact && !u.pinnedStart) {
+          let gaps = slots;
+          for (const v of ordered) {
+            if (v.id === u.id || placed.has(v.id)) continue;
+            for (const s of prevBy.get(v.id) || []) if (s.end > from) gaps = reserve(gaps, Math.max(s.start, from), s.end, buf);
+          }
+          const g = findPlacement(gaps, u.mins, Math.max(from, u.notBefore || 0, pred.end ? pred.end + buf : 0), u.deadline > now && !u.lateOk ? u.deadline : null, buf, u.difficulty === 'hard');
+          const earlier = g && (T.dayStart(g[0].start) < T.dayStart(k.prev[0].start) || k.prev[0].start - g[0].start >= COMPACT_MIN * MIN) &&
+            !(opts.gap && g[0].start < opts.gap.end && last(g).end > opts.gap.start);   // time freed by finishing early is offered to the student, never taken by itself
+          if (earlier && last(g).end <= last(k.prev).end && g.length <= k.prev.length) { take(u, g); return; }
+        }
         slots = k.trial;
         placed.set(u.id, k.prev.map((s) => ({ start: s.start, end: s.end })));
         return;
@@ -430,9 +450,12 @@
     if (opts.prevPlan && opts.prevPlan.length) {
       // Keep the student's plan stable unless a fresh plan is clearly better
       // (fits more work, or finishes important work much earlier with fewer pieces).
-      const stable = scheduleOnce(state, now, opts.prevPlan);
+      // opts.hold (a task was just finished early) and opts.gap (time freed that way is still ahead): other tasks
+      // stay where they are. Only a REQUIRED repair may override that: a from-scratch plan that fits more work.
+      const settled = !!opts.hold || !!opts.gap;
+      const stable = scheduleOnce(state, now, opts.prevPlan, { compact: !!opts.compact && !opts.hold, gap: opts.gap || null, settled: !!opts.hold });
       if (stable.unscheduled.length < fresh.unscheduled.length ||
-          (stable.unscheduled.length === fresh.unscheduled.length && planCost(stable.plan, now) <= planCost(fresh.plan, now) * 1.25 + 2)) {
+          (stable.unscheduled.length === fresh.unscheduled.length && (settled || planCost(stable.plan, now) <= planCost(fresh.plan, now) * 1.25 + 2))) {
         result = stable;
       }
     }
@@ -763,7 +786,7 @@
   }
 
   root.TempoEngine = {
-    MIN_SESSION, MAX_SESSION, occurrences, freeSlots, units, rank, schedule, capacity, diff,
+    MIN_SESSION, MAX_SESSION, COMPACT_MIN, occurrences, freeSlots, units, rank, schedule, capacity, diff,
     completionConfidence, CONFIDENCE, nextSession, currentFixed, explain, eventConflicts, recurringConflicts, analyzeBaseline, phase3,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

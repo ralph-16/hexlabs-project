@@ -34,7 +34,7 @@ Every result in this guide was checked against the app on 14 Oct 2026. Section 1
 | Deadline comes first, difficulty second | §5.1 |
 | Dates, times and durations can be edited and stick | §5.2 |
 | A change in the student's week moves the right work to the right day, with approval | §6 |
-| Finishing work updates the plan and the week's progress | §7.1 |
+| Finishing early frees time, and SIKAD asks before moving anything into it | §7.1, §12 Scenario 11 |
 | A tight day is flagged in plain words, with the reason and a next step | §7.1, §12 |
 | Adjust schedule recommends a time, takes another, and reflows the plan | §12, Scenario 10 |
 | A block that ends is asked about, never assumed done; unfinished work gets a recommended schedule | §7.2 |
@@ -103,8 +103,8 @@ If any row differs, the Demo clock was not on next Monday 9:05 AM when the week 
 |---|---|
 | Asking a question in Ask SIKAD | **Accept changes** on a proposal |
 | "What happens if…" previews | **Save & replan** in Task details |
-| **See plan changes** (opens a proposal only) | **Done**, **Snooze**, ending a focus session |
-| Opening a task, switching tabs, Overview | Moving the Demo clock past a planned block (raises a check-in and puts that block's time on hold) |
+| **See plan changes** (opens a proposal only) | **Done**, **Snooze**, ending a focus session (other tasks stay put; a suggestion may appear) |
+| Opening a task, switching tabs, Overview, **Decline** on a suggestion | Moving the Demo clock past a planned block (raises a check-in and puts that block's time on hold) |
 | Widget previews; showing or dismissing a notification on the phone | Answering a check-in; **Start focus** on a notification |
 
 ### 3.7 The one recovery that always works
@@ -125,7 +125,7 @@ Open **Judge tools** → set the Demo clock to next Monday 09:05 AM → **Set** 
 | 6 | Deadline first, difficulty second | 5.1 | 1:00 | Yes |
 | 7 | Edit a task's time, deadline and start | 5.2 | 1:00 | Yes |
 | 8 | A shift appears: the plan adapts across days | 6.1 | 1:00 | Yes |
-| 9 | Focus Mode, finish a task, see the week update | 7.1 | 1:15 | Yes |
+| 9 | Focus Mode, finish a task early, accept the suggestion for the freed time | 7.1 | 1:30 | Yes |
 | 10 | Weekly Overview *(can be skipped)* | 9 | 0:45 | No |
 | 11 | Widgets | 10 | 0:45 | No |
 | 12 | Notifications on a simulated phone, then close | 11, 15 | 1:15 | No |
@@ -374,31 +374,30 @@ A three-day example is in §12, Scenario 3.
 6. Tap **Stop early**.
 7. Asked "Is this piece of work complete?", tap **Yes, it's complete**.
 
-**Expected result:** the title is struck through, then the toast "Algorithm Tracing Worksheet" is done. Your plan has been updated.
+**Expected result:** the title is struck through, then the toast ""Algorithm Tracing Worksheet" is done. There is a suggestion for the time you freed."
 
-The **Plan updated** card lists:
+The **Plan updated** card says the task is complete and lists only that. **No other task has moved.** Below it, a new card:
 
-| Task | Was | Now |
-|---|---|---|
-| Algorithm Tracing Worksheet | | Completed |
-| Big-O Worksheet | Today 6:15 PM | Today 12:15 PM |
-| Class Diagram Exercise | Today 7:30 PM | Today 6:15 PM |
-| ERD and Business Rules | Wednesday 5:15 PM | Today 7:30 PM |
+> **Use the time you freed?** Big-O Worksheet could move to **Today, 12:15 PM – 1:15 PM**. Planned now: Today, 6:15 PM – 7:15 PM · 1 hr. "You finished "Algorithm Tracing Worksheet" early, so today 12:15 PM – 1:15 PM is open. It is the next task by deadline (due tomorrow, 11:59 PM) that fits there, and it is marked hard. No other task would move. Nothing changes unless you accept." **Accept** · **Decline**
+
+8. Tap **Accept**.
+
+**Expected result:** toast "Plan updated." with **Undo**. The Plan updated card reads "You chose to use the time freed by finishing "Algorithm Tracing Worksheet" early. No other task moved." with one move: Big-O Worksheet, Today 6:15 PM → Today 12:15 PM.
 
 **Verify:**
 
 | Where | Reads |
 |---|---|
 | WHAT TO DO NEXT | Big-O Worksheet · Today · 12:15 PM – 1:15 PM |
-| Today | 4 hrs remaining · 1 of 4 tasks completed |
-| Today, risk line | **ERD and Business Rules — At risk today**. "This task may not fit today. You have about 2 hr 45 min of usable time left today after the 2 tasks planned before it for about 2 hrs of work, which leaves little room to spare." with an **Adjust schedule** button |
+| Today | 2 hrs remaining · 1 of 3 tasks completed. No warning rows. |
 | Weekly task progress | **14%** · 1 hr completed of 7 hrs planned · **Fits** |
+| Tasks | Big-O Worksheet: Next Today, 12:15 PM · Class Diagram Exercise: Next Today, 7:30 PM · ERD and Business Rules: Next Wednesday, 5:15 PM |
 
-**Why this matters:** the hour that opened up at noon is used. Work moves forward, and when that makes today tight, SIKAD says so plainly.
+**Why this matters:** finishing early frees time, and SIKAD spots the best use for it. But moving another task is an improvement, not a necessity, so it asks first. Only the task it named moves, and only when you say so.
 
 **Say:**
 
-> "I start the task, and SIKAD suggests a way to work and says why. I'm skipping the timer ahead with a presenter tool. A finished timer never marks a task done; I say how it went. Because I'm done early, the next tasks move up. And look: today is now tight for ERD, so SIKAD says 'At risk today' and tells me why: two hours forty-five of usable time for two hours of work, after two other tasks. It does not give me a mystery percentage. It is a simple rule about time left against work left, not a prediction, and no AI is behind it."
+> "I start the task, and SIKAD suggests a way to work and says why. I'm skipping the timer ahead with a presenter tool. A finished timer never marks a task done; I say how it went. I finished early, so SIKAD suggests using the free hour at noon for the next task by deadline. It does not just move it: it asks. I accept, and only that one task moves. If I had declined, my plan would have stayed exactly as it was."
 
 **If it differs:**
 
@@ -406,7 +405,8 @@ The **Plan updated** card lists:
 |---|---|
 | The dimmed screen hides something | Tap the dimmed area or **Show my plan**. The timer keeps running. |
 | You tapped **Partly done** by mistake | Tap **Back**, then **Yes, it's complete**. |
-| No **At risk today** line | The earlier stops were done differently. The feature is fine; show it with §12, Scenario 2 or 3 instead. |
+| No **Use the time you freed?** card | The Demo clock passed 12:15 PM, or the earlier stops were done differently. Show the feature with §12, Scenario 11 instead. |
+| You tapped **Decline** | Nothing moved. Carry on: Stops 10 to 12 then show Big-O Worksheet at 6:15 PM instead of 12:15 PM. |
 
 Next: Stop 10 is §9.
 
@@ -525,7 +525,7 @@ Nothing here changes the plan.
 | **Your time budget** | about **49 hrs** | Usable time for tasks from now to Sunday night, after classes, commutes and the job. Not the length of the week. |
 | **Tasks remaining** | **4 of 5** · "1 task completed this week." | |
 | **Time needed** | **6 hrs** | Estimated time left on unfinished tasks. |
-| Day cards | **Today 4h**, **Thu 2h**, the rest "—" | Task time planned each day. A full bar means that day's open time is all planned. |
+| Day cards | **Today 2h**, **Wed 2h**, **Thu 2h**, the rest "—" | Task time planned each day. A full bar means that day's open time is all planned. |
 
 2. Tap **Tue**. The timeline shows **Work shift 6:00 PM – 10:00 PM · One-time**, the shift you added.
 3. Tap the **Previous week** arrow. You see **Last week**, **Done vs. planned 88%**, "Done 7 hrs of 8 hrs planned · 1 missed · 0 moved". The one missed block belongs to the task that was overdue this morning.
@@ -554,7 +554,7 @@ After Stop 9, the three widgets read:
 | Widget | Small | Medium | Large |
 |---|---|---|---|
 | **Next move** | Big-O Worksheet · Today · 12:15 PM | adds the end time, duration, IT 205 and "Due Tomorrow, 11:59 PM" | adds **After that**: the next three sessions |
-| **Today** | 4 hrs left today · 1 of 4 tasks done | adds the next two items of the day | adds up to six items, classes marked **Fixed** |
+| **Today** | 2 hrs left today · 1 of 3 tasks done | adds the next two items of the day | adds up to six items, classes marked **Fixed** |
 | **This week** | 14% of the week done | adds "1 hr done of 7 hrs planned", **Fits**, and a bar for each day | adds **Coming up**: the next three deadlines |
 
 4. Tap **Restore default sizes**. The defaults are Next move Medium, Today Small, This week Large.
@@ -583,11 +583,11 @@ After Stop 9, they read:
 |---|---|---|---|
 | **Time to start** | 10 minutes before a planned block begins | Up next: Big-O Worksheet | Start focus · View task |
 | **Deadline coming up** | A task is due within a day and still has work left | Class Diagram Exercise is due tomorrow, 11:59 PM | View task · Adjust schedule (opens the recommended-time sheet) |
-| **At risk today** | A task planned today may not get finished today | ERD and Business Rules is at risk today | Review task · Adjust schedule |
+| **At risk today** *(Sample)* | A task planned today may not get finished today | Big-O Worksheet is at risk today | Review task · Adjust schedule |
 | **Plan updated** *(Sample)* | SIKAD moved a block after something changed | Plan updated: Subnetting Drill moved | Review schedule · View changes |
 | **Not enough time** *(Sample)* | Some work no longer fits before its deadline | Not enough time for Reflection Paper | Review options · View affected tasks |
 
-A kind marked **Sample** uses example text, because the current plan has nothing that fits it. Here the last two are samples: nothing is short of time, and the **Plan updated** card on Home clears itself about 12 seconds after a change, so by now there is no recent change to report. (Right after a change, this kind shows the real move instead.)
+A kind marked **Sample** uses example text, because the current plan has nothing that fits it. Here the last three are samples: no task is at risk today, nothing is short of time, and the **Plan updated** card on Home clears itself about 12 seconds after a change, so by now there is no recent change to report. (Right after a change, this kind shows the real move instead.)
 
 3. **Try three buttons.** Each leads to a real part of the app. Do them in this order:
 
@@ -605,7 +605,7 @@ A kind marked **Sample** uses example text, because the current plan has nothing
 
 **Say:**
 
-> "Here is how SIKAD's reminders could look on a phone. Five kinds, each tied to something SIKAD already knows. Three of these are filled in from Alex's real plan right now, and two are marked as samples. A notification alone is not always enough, so each has buttons: this one opens the task, this one takes me to the schedule. On a sample, a button that needs a real task does nothing and says so. To be clear, this phone is a drawing inside the app. Sending these to a real phone while the app is closed needs a push service and a server, which this prototype does not have."
+> "Here is how SIKAD's reminders could look on a phone. Five kinds, each tied to something SIKAD already knows. Two of these are filled in from Alex's real plan right now, and three are marked as samples. A notification alone is not always enough, so each has buttons: this one opens the task, this one takes me to the schedule. On a sample, a button that needs a real task does nothing and says so. To be clear, this phone is a drawing inside the app. Sending these to a real phone while the app is closed needs a push service and a server, which this prototype does not have."
 
 **If it differs:**
 
@@ -621,7 +621,7 @@ Then close with §15.
 
 ## 12. Optional judge scenarios
 
-**Each scenario starts from a fresh sample week.** Do §3.7 first, every time, unless the row says otherwise. Never assume the plan is as the previous scenario left it.
+**Each scenario starts from a fresh sample week.** Do §3.7 first, every time, unless the row says otherwise (Scenario 10 continues from Scenario 3). Never assume the plan is as the previous scenario left it.
 
 | # | Shows | Starts from |
 |---|---|---|
@@ -634,7 +634,8 @@ Then close with §15.
 | 7 | Snooze and Undo | Fresh week |
 | 8 | Partly done in Focus Mode | Fresh week |
 | 9 | A proposal rejected; a missing deadline; an unclear command | Any state (§8.2) |
-| 10 | **Adjust schedule**: a recommended time, another time, a refused time | Fresh week |
+| 10 | **Adjust schedule**: a recommended time, another time, a refused time | The end of Scenario 3 |
+| 11 | Finishing early again and again: a new suggestion each time, tomorrow-to-today, Decline, and repairs that do not wait | Fresh week |
 
 ### Scenario 2 — At risk on a tight evening
 
@@ -724,35 +725,56 @@ Undo goes back one change only, and is gone after a page reload.
 
 ### Scenario 10 — Adjust schedule: a recommended time, or your own
 
-1. **Ask SIKAD** → **Speak or type** → `I have to work tonight from 6:30 PM to 10:30 PM` → **Send** → **See plan changes** → **Accept changes**. (This is Scenario 3. The **Today** card now shows Algorithm Tracing Worksheet **At risk today**.)
-2. On that row, tap **Adjust schedule**.
+> **Starts from the end of Scenario 3** (a work shift tonight). The **Today** card shows Algorithm Tracing Worksheet **At risk today**.
 
-**Expected:** a sheet titled **Adjust schedule**. It lists the task, **Time still needed: 1 hr**, **Planned now: Today, 12:15 PM – 1:15 PM**, and **Recommended: Tomorrow, 6:15 PM** with the reason "Today is too tight for 1 hr of work. Tomorrow at 6:15 PM is the next open time." The **Start at** fields already hold tomorrow's date and 06:15 PM. Under them, **What would change**: Algorithm Tracing Worksheet, Today 12:15 PM → Tomorrow 6:15 PM; Class Diagram Exercise, Tomorrow 6:15 PM → Today 12:15 PM. It also says Class Diagram Exercise would then be at risk today, because it takes the tight midday gap. Nothing has changed yet.
+1. On that row, tap **Adjust schedule**.
 
-3. **Choose another time.** Set **Start at** to **Thursday** of the demo week, **07:00 PM**.
+**Expected:** a sheet titled **Adjust schedule**: the task, **Time still needed: 1 hr**, **Planned now: Today, 12:15 PM – 1:15 PM**, and **Recommended: keep Today, 12:15 PM** with "12:15 PM is already today's earliest open time for it, and overdue work goes first. Moving it later would only delay it." The **Start at** fields hold today, 12:15 PM. **What would change**: nothing. **Accept changes** is greyed out.
 
-**Expected:** the list is worked out again: "3 other tasks move to make room, across 2 days." Algorithm Tracing Worksheet → Thursday 7 PM; Class Diagram Exercise → Today 12:15 PM; Big-O Worksheet → Tomorrow 6:15 PM; ERD and Business Rules → Tomorrow 7:30 PM.
+2. **Choose another time.** Set **Start at** to **Thursday** of the demo week, **07:00 PM**.
 
-4. **Try a time that cannot work.** Set **Start at** to **Monday** of the demo week, **03:00 PM**.
+**Expected:** the plan is worked out again: "3 other tasks move to make room, across 2 days", each shown was → now, and a warning that Class Diagram Exercise would then be at risk today. Nothing is saved.
 
-**Expected:** "That time can't be used. That time runs into IT 207 (2:00 PM – 5:00 PM) or the 15-minute gap around it. SIKAD never moves a fixed commitment. The closest time that works is Today, 12:45 PM." with a **Use Today 12:45 PM** button. **Accept changes** is greyed out.
+3. **Try a time that cannot work.** Set **Start at** to **Monday** of the demo week, **03:00 PM**.
 
-5. Tap **Use recommended time**, then **Accept changes**.
+**Expected:** "That time can't be used", naming IT 207, with a button for the closest time that works. **Accept changes** is greyed out.
 
-**Verify:**
-
-| Where | Reads |
-|---|---|
-| Toast | "Plan updated." with **Undo** |
-| **Today** card | No row for Algorithm Tracing Worksheet any more. Class Diagram Exercise is **At risk today** (the genuine remaining warning). |
-| **Tasks** | Algorithm Tracing Worksheet: **Status: Scheduled · Next: Tomorrow, 6:15 PM**, under **Up next**, still marked **Overdue**. Open it: **Start at** reads tomorrow, 06:15 PM. |
-| **Overview → Tue** | Algorithm Tracing Worksheet at 6:15 PM, then Big-O Worksheet at 7:30 PM. |
+4. Tap **Keep current plan**. Nothing changed.
 
 **Say:**
 
-> "This task is at risk today. I tap Adjust schedule and SIKAD already has a recommendation, with the reason and what else would move. I can take it, or pick my own time and watch the plan get worked out again. If I pick a time inside a class, it tells me which class and offers the closest time that works. Nothing changes until I accept, and afterwards every screen agrees."
+> "SIKAD compares whole plans before it recommends anything. This task is overdue and already in today's first free hour, so the honest recommendation is to keep it there. I can still pick my own time and see exactly what that would do to everything else, including which task would become tight, before I decide."
 
-**If it differs:** a different recommended time means the plan was not Scenario 3's; do §3.7 and start again. **Keep current plan** always leaves everything as it was.
+**If it differs:** a different recommendation means the plan is not Scenario 3's; do §3.7 and repeat Scenario 3.
+
+### Scenario 11 — Finishing early, again and again: every finish asks
+
+> **Fresh week (§3.7).** The Demo clock reads Monday 9:05 AM.
+
+**Part A — three early finishes in a row, each accepted.**
+
+| # | Do this | You should see |
+|---|---|---|
+| 1 | On **Home**, tap **Done** on the **WHAT TO DO NEXT** card (Algorithm Tracing Worksheet, 12:15 PM). | Toast "… is done. There is a suggestion for the time you freed." No other task has moved. Card: **Class Diagram Exercise could move to Today, 12:15 PM – 1:15 PM** (planned now Today 6:15 PM). |
+| 2 | Tap **Accept**. | Only Class Diagram Exercise moves, to 12:15 PM. |
+| 3 | Tap **Done** again (now Class Diagram Exercise, 12:15 PM). | A **new** card: **Big-O Worksheet could move to Today, 12:15 PM – 1:15 PM**. Check the timeline: Big-O Worksheet is still at 7:30 PM. The earlier Accept did not approve this. |
+| 4 | Tap **Accept**, then **Done** a third time (Big-O Worksheet). | A new card: **Use Case Diagram could move to Today, 12:15 PM – 1:45 PM**, planned now **Tomorrow 8:30 PM**. A task from tomorrow is suggested for today, and it is still tomorrow. |
+| 5 | **Judge tools** → **+15 min** twice, then reload the page. | Nothing has moved. The card is still there, unanswered. |
+| 6 | Tap **Accept**. | Use Case Diagram is today at 12:15 PM. ERD and Business Rules is still tomorrow at 6:15 PM. |
+| 7 | **+15 min** again and reload. | Still exactly the same: nothing is pulled forward later by itself. |
+
+**Part B — decline, and repairs that do not wait.**
+
+1. Make a clean state (§3.7). Tap **Done**, then **Decline** on the card.
+   **Expected:** "Kept as it was. "Class Diagram Exercise" stays where it is planned." The plan is unchanged.
+2. Reload, then **Judge tools** → **+15 min**.
+   **Expected:** the card does not come back; the plan is unchanged.
+3. Tap **Done** on the next task (Class Diagram Exercise, 6:15 PM): a separate finish.
+   **Expected:** its own card: **Big-O Worksheet could move to Today, 6:15 PM – 7:15 PM**. Nothing has moved.
+4. Make a clean state. Tap **Done**, leave the card, and add `I have a work shift tomorrow from 6 PM to 10 PM.` through Ask SIKAD → **See plan changes**.
+   **Expected:** the task the shift displaces (ERD and Business Rules) is moved at once, into today's freed time if that is what it takes; after **Accept changes** the card is gone because that time is used.
+
+**Say:** "Finishing early is good news, and SIKAD suggests a use for the time, every time. A yes covers that one move only; the next early finish asks again, even when the best candidate is tomorrow's work. If I say no, nothing moves and it does not nag me. Repairs that keep my plan valid still happen on their own."
 
 ---
 
@@ -784,7 +806,8 @@ Undo goes back one change only, and is gone after a page reload.
 | Action | Undoes |
 |---|---|
 | **Undo** on a toast | The last single change. Not available after a reload. |
-| **Reject** / **Keep my current plan** / **Keep current plan** on Adjust schedule | Nothing was applied, so nothing to undo. |
+| **Reject** / **Keep my current plan** / **Keep current plan** on Adjust schedule / **Decline** on a suggestion | Nothing was applied, so nothing to undo. |
+| **Undo** after accepting a suggestion | The move only. The task you finished stays done, and the suggestion card comes back. |
 | **Keep current plan** on a Recommended schedule | Nothing was applied. The check-in stays on Home. |
 | Demo clock moved back | Withdraws check-ins for blocks that are ahead again. Changes no task, credit or edit. |
 | **Reset to Alex's week** | Everything. Replaces all data at this address. |
@@ -841,16 +864,16 @@ No confirmed defect is open: the eleven recorded in `errors.md` §10 are fixed. 
 
 ### How this guide was checked
 
-- **Logic tests:** `node tests/run-tests.js` — 108 passed, 0 failed (14 Oct 2026).
+- **Logic tests:** `node tests/run-tests.js` — 130 passed, 0 failed (14 Oct 2026).
 - **Browser:** headless Chromium at 390 px, Demo clock on Monday 19 Oct 2026, 9:05 AM. Checked by driving the real screens and reading the result after every step:
   - Stop 2 (setup) through to the first plan.
   - Stops 3 to 12 in order, as one continuous run, including every expected value in §5, §6.1, §7.1, §9, §10 and §11.
   - §7.2 (forward, +15 min, reload, all three answers, Accept, Keep current plan, Undo, and the rewind).
   - §11: every notification on the phone, and every button, on real and on sample content, with the return bar and the browser's Back button.
-  - Scenarios 2 to 8 and Scenario 10 in §12, each from a fresh week.
+  - Scenarios 2 to 8, 10 and 11 in §12.
   - The lines in §8.1 and the last three rows of §8.2.
 - **Other Mondays:** the starting plan in §3.4 was computed for four different Mondays and was identical each time.
-- **The full route was replayed from this guide** after its latest revision, at a presenter's pace: 258 on-screen checks, all matching, no console errors. The 7-minute cut was not replayed as a whole; it only leaves out stops that do not change the plan, and the run without Stop 2 matched through Stop 8.
+- **The full route was replayed from this guide** after its latest revision, at a presenter's pace: 270 on-screen checks, all matching, no console errors. The 7-minute cut was not replayed as a whole; it only leaves out stops that do not change the plan, and the run without Stop 2 matched through Stop 8.
 - **Why Stops 6 to 9 must not be skipped singly:** a run without Stop 7 gave a different plan at Stop 9 (ERD and Business Rules split across today and Wednesday).
 - **Checked by the logic only, not in the browser:** the first four rows of §8.2, and that moving the clock back leaves manual completions and later edits alone.
 - **Not checked:** a real phone, iOS Safari, voice input, a screen reader, an installed app, offline use, and the three messages in the "If it differs" table of §5.2.

@@ -65,7 +65,7 @@ Several tests ask whether the plan changed. Open **Tasks** and note each task's 
 node tests/run-tests.js
 ```
 
-It prints one line per test and ends with a count such as `108 passed, 0 failed`. Record the count you get.
+It prints one line per test and ends with a count such as `130 passed, 0 failed`. Record the count you get.
 
 ---
 
@@ -106,7 +106,7 @@ It prints one line per test and ends with a count such as `108 passed, 0 failed`
 - Lab Summary is due before ERD and Business Rules (Wednesday 11:59 PM), so it is planned ahead of it: on the sample week, **Tomorrow 6:15 PM**, with ERD after it at 8:00 PM. Use Case Diagram, the last deadline, is placed again around them (on the sample week it is split: an hour Monday at 8:45 PM and half an hour Tuesday at 11:15 AM). Every task is still before its own deadline. The three earlier Monday tasks do not move.
 - Tuesday's timeline shows classes and commutes unchanged, at least 15 minutes between tasks and between a task and a class, and each task once.
 - After step 9, Group Notes is at **Tomorrow 6:15 PM**, exactly as asked. The task that was there (ERD and Business Rules) has moved to 7:30 PM, and Use Case Diagram has been placed again around them; both are still before their deadlines. The Plan updated card lists each move as was → now. No class moved.
-- After step 10, Group Notes is at **Wednesday 11:15 AM**, the plan has changed again, and every task is still planned once and before its deadline.
+- After step 10, Group Notes is at **Wednesday 11:15 AM**. ERD and Business Rules has moved back up into the time it left (Tomorrow 6:15 PM): a gap that a change opens is closed. Every task is still planned once and before its deadline.
 - After step 8 the sheet shows 2 hr 0 min and 06:00 PM, the card shows **Due: Wed, … 6:00 PM · Est: 2 hrs**, and ERD and Business Rules has moved to Wednesday, still before its deadline.
 
 **Pass:** all of the above.
@@ -200,22 +200,42 @@ New assignment: capstone chapter due tomorrow at 8 AM, about 5 hours. New assign
 | 10 | Make a clean state, repeat step 5, then tap **Not finished** and **Accept changes**. | Nothing is credited (0%). The task keeps its full hour and is planned again; because it is overdue it goes first, and the tasks after it shift. |
 | 11 | Make a clean state, repeat step 5, then tap **Completed**. | Only now is the hour credited: progress reads 15%. Toast "Logged as done. Plan adjusted." with **Undo**. |
 
+**Part D — finishing early: a suggestion, never an automatic move.** Start from a clean state.
+
+| # | Do this | Expected |
+|---|---|---|
+| 16 | Note the plan (§2.4). On **Home**, tap **Done** on the next task (Algorithm Tracing Worksheet, planned 12:15 PM). | The task is done. **No other task has moved.** A card **Use the time you freed?** names Class Diagram Exercise, **Today, 12:15 PM – 1:15 PM**, where it is planned now, and why. It has **Accept** and **Decline**. Only one such card is shown. |
+| 17 | Check the suggested time. | It starts no earlier than 15 minutes after you tapped Done, and on the next quarter hour. It does not overlap a class or commute, ends before the task's deadline, and is one sitting. |
+| 18 | Tap **Decline**. | "Kept as it was…". The card is gone and the plan is exactly as noted in step 16. |
+| 19 | Reload the page, then **Judge tools** → **+15 min**. | The card does not come back. The plan is unchanged. |
+| 20 | **Tasks → Use Case Diagram → Difficulty: Easy → Save & replan**, then **Home**. | The card is back (the plan changed for another reason). Nothing has moved yet. |
+| 21 | Tap **Accept**. | Toast "Plan updated." with **Undo**. Only Class Diagram Exercise moved, to 12:15 PM. Every other task is where it was. It is still open (not marked done) and its time needed is unchanged. |
+| 22 | Tap **Undo** on the toast. | Class Diagram Exercise is back at 6:15 PM, the card is back, and Algorithm Tracing Worksheet is still done. |
+| 23 | Make a clean state. Tap **Done**, leave the card. Add `I have a work shift tomorrow from 6 PM to 10 PM.` through Ask SIKAD → **See plan changes** → **Accept changes**. | The task the shift displaces (ERD and Business Rules) is moved at once, using today's freed time if needed. The card is gone because that time is now used. A required repair does not wait for the suggestion. |
+| 24 | Make a clean state. Move the Demo clock to **01:30 PM** and answer the check-in with **Completed**. | No suggestion appears: the block had already ended, so no time was freed. |
+| 25 | Make a clean state. Tap **Done**, **Accept**, then **Done** again on the task that just moved. | A **new** card for a different task (Big-O Worksheet, Today 12:15 PM). Check the timeline before answering: that task has not moved. The first Accept did not approve this one. |
+| 26 | **Accept**, then **Done** a third time. | A card that suggests **Use Case Diagram**, planned **tomorrow**, for **today** 12:15 PM. On the timeline it is still tomorrow. |
+| 27 | **Judge tools** → **+15 min** twice, reload. | Nothing moved; the card is still there. |
+| 28 | Tap **Decline** on it. Then **+15 min** and reload. | Use Case Diagram stays tomorrow. The card does not come back. |
+| 29 | Make a clean state. Repeat rows 16 and 21 (Done, Accept), wait one minute, **+15 min**, reload. | After accepting, nothing else moves by itself afterwards. In particular ERD and Business Rules stays tomorrow. |
+| 30 | Make a clean state. Start the next task in **Focus Mode**, **Stop early**, **Yes, it's complete**. Then repeat with **Tasks → (task) → Mark whole task done**, and with Ask SIKAD `Mark Big-O Worksheet as done` → **See plan changes** → **Accept changes**. | Each way of finishing early ends in the same card and moves nothing until you accept. |
+
 **Part C — warnings and honesty.**
 
 | # | Do this | Expected |
 |---|---|---|
 | 12 | Make a clean state. **Ask SIKAD** → `I have to work tonight from 6:30 PM to 10:30 PM` → **Send** → **See plan changes** → **Accept changes**. Read the **Today** card. | **At risk today** and **Won't fit today** appear as words, each with a sentence that gives the real time left and time needed, and an **Adjust schedule** button. **No percentage** appears beside them. |
-| 13 | On the **At risk today** row (Algorithm Tracing Worksheet), tap **Adjust schedule**. | A sheet titled **Adjust schedule**. It shows the task, **Time still needed**, **Planned now**, and **Recommended: Tomorrow, 6:15 PM** with a reason. The **Start at** date and time are already filled in with that recommendation, and **What would change** lists the tasks that would move. The plan has not changed. |
-| 13a | Set **Start at** to **Thursday 07:00 PM**. | The list is worked out again and now shows several tasks moving across more than one day. Still nothing saved. |
+| 13 | On the **At risk today** row (Algorithm Tracing Worksheet, which is overdue), tap **Adjust schedule**. | A sheet titled **Adjust schedule**. It shows the task, **Time still needed**, **Planned now: Today, 12:15 PM – 1:15 PM**, and **Recommended: keep Today, 12:15 PM** with the reason that this is already today's earliest open time and overdue work goes first. The **Start at** date and time are already filled in. **What would change** says nothing moves, and **Accept changes** is greyed out. Tomorrow is **not** recommended. |
+| 13a | Set **Start at** to **Thursday 07:00 PM**. | The plan is worked out again: several tasks move across more than one day, each shown was → now, and a warning says Class Diagram Exercise would then be at risk today. Still nothing saved. |
 | 13b | Set **Start at** to **Monday 03:00 PM**. | "That time can't be used", naming IT 207, with a button for the closest time that works. **Accept changes** is disabled. |
 | 13c | Tap **Keep current plan**. Compare the plan (§2.4). | Nothing changed. |
-| 13d | Tap **Adjust schedule** again, leave the recommended time, tap **Accept changes**. | Toast "Plan updated." with **Undo**. The **Today** card no longer has a row for Algorithm Tracing Worksheet. On **Tasks** it reads **Scheduled · Next: Tomorrow, 6:15 PM** under **Up next**, not under Needs attention. **Overview → Tue** shows it at 6:15 PM. |
-| 13e | Read the **Today** card again, wait 15 seconds, read it again. | Warnings that are still true are still there both times: Class Diagram Exercise **At risk today** (it took the tight midday gap) and Big-O Worksheet **Won't fit today**. Nothing vanishes or reappears by itself. |
+| 13d | Tap **Adjust schedule** again, set **Start at** to **Tuesday 06:15 PM** (your own choice, against the recommendation), read the warning, tap **Accept changes**. | Toast "Plan updated." with **Undo**. The **Today** card no longer has a row for Algorithm Tracing Worksheet. On **Tasks** it reads **Scheduled · Next: Tomorrow, 6:15 PM** under **Up next**, not under Needs attention. **Overview → Tue** shows it at 6:15 PM. |
+| 13e | Read the **Today** card again, wait 15 seconds, read it again. | Warnings that are still true are still there both times: Class Diagram Exercise **At risk today** (it took the tight midday gap, as the sheet warned) and Big-O Worksheet **Won't fit today**. Nothing vanishes or reappears by itself. |
 | 13f | Make a clean state. Add the two-assignment text from Part A, **See plan changes**, **Don't adjust**, **Accept changes**, then **Keep my current plan** if a sheet opens. Open **Tasks**. | The work that has no slot is under **Needs attention** with **Doesn't fit yet**, and Home shows **Not enough time**. A genuine problem is not cleared by replanning. |
 | 14 | **Profile → Test notifications**. Tap **Show on phone** for each kind. Try the buttons on one real and one **Sample** notification. | Each notification appears inside the drawn phone. The phone and the list of kinds do not move or change size when you show, switch or clear one. A button on a real one opens that task or screen. A button on a sample that needs a real task opens nothing and says "This is sample content…". The page states that the phone is a drawing and nothing is sent. |
 | 15 | **Profile**, read **How SIKAD plans & its limits** and **Connected platforms**. | They say that reading photos and platform connections use sample data, that no AI model is connected, and that widgets and notifications are previews. |
 
-**Pass:** fixed commitments never move; nothing is planned after its deadline unless it was already overdue or you accepted a late plan; too much work is stated plainly; rejecting a proposal changes nothing; time passing alone never completes a task or adds progress; completion needs your tap; the remaining time is the one you entered; warnings explain themselves in words; Adjust schedule arrives with a recommended time, takes another, refuses an impossible one, and after acceptance every screen shows the same plan with no stale warning; simulated features are labelled.
+**Pass:** fixed commitments never move; nothing is planned after its deadline unless it was already overdue or you accepted a late plan; too much work is stated plainly; rejecting a proposal changes nothing; time passing alone never completes a task or adds progress; completion needs your tap; the remaining time is the one you entered; warnings explain themselves in words; Adjust schedule arrives with a recommended time, takes another, refuses an impossible one, and after acceptance every screen shows the same plan with no stale warning; finishing early moves nothing until you accept the suggestion, every early finish asks again, and declining it sticks; simulated features are labelled.
 
 **Fail:** any of those is violated.
 
@@ -255,6 +275,19 @@ New assignment: capstone chapter due tomorrow at 8 AM, about 5 hours. New assign
 | `BLOCKED` | The test could not be completed because something it needs was unavailable. |
 | `RETEST PASS` | A scenario that failed now passes after a correction. |
 | `RETEST FAIL` | The problem is still there after a correction. |
+
+## 4a. Compatibility checks (all untested)
+
+These need a real device or setting. None has been run by anyone yet. Record each in the test log under T5 when you do it.
+
+| Check | How | Status |
+|---|---|---|
+| iOS Safari | Open the app on an iPhone. Edit a task's deadline and start time; open Adjust schedule; open Test notifications. | UNTESTED |
+| A real Android or iOS phone | Run the main route in `user_flow.md` on the phone. | UNTESTED |
+| Screen reader | With VoiceOver or TalkBack on, answer a check-in and accept an Adjust schedule proposal. | UNTESTED |
+| Installed PWA | Install from Chrome over HTTPS or localhost; open it from the home screen; check the icon. | UNTESTED |
+| Offline | Load once online, switch off the network, reload, and check the plan and the typeface. | UNTESTED |
+| System theme | Profile → Appearance → System; switch the device between light and dark. | UNTESTED |
 
 ## 5. Known limits you may meet
 

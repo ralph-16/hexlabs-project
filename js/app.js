@@ -976,6 +976,7 @@
       <div class="col-a">
       ${updateCard()}
       ${checkinCards()}
+      ${offerCard()}
       ${autoDoneCard()}
       ${focusCard()}
       <div id="attention" tabindex="-1">${attentionBlock()}</div>
@@ -1048,6 +1049,25 @@
             <button class="btn small ghost" data-action="autoUndo" data-id="${esc(r.id)}" aria-label="I didn't finish ${esc(r.title)}">I didn't finish</button></li>`).join('')}</ul>
         ${list.length > shown.length ? `<p class="small">And ${list.length - shown.length} earlier.</p>` : ''}
         <div class="row"><button class="btn small" data-action="autoAck">${ICON.check} OK, that's right</button></div>
+      </section>`;
+  }
+
+  /**
+   * EARLY-FINISH SUGGESTION (store.js, "early finish"). The student finished a block early; another task
+   * could use the freed time. This is optional, so nothing has moved: the card asks. One at a time, in the
+   * flow of Home (never a sheet), and it stays out of the way until answered or until its time has passed.
+   */
+  function offerCard() {
+    const o = state.offer;
+    if (!o || o.status !== 'pending' || state.active) return '';
+    const n = now();
+    return `
+      <section class="status-card s-neutral offer" aria-labelledby="offer-title" data-flip="offer" data-flip-exit>
+        <div class="sc-head">${ICON.step}<h2 id="offer-title">Use the time you freed?</h2></div>
+        <p><b>${esc(o.title)}</b> could move to <b class="num">${T.rel(o.to.start, n)}, ${T.range(o.to.start, o.to.end)}</b>.</p>
+        <p class="small num">Planned now: ${T.rel(o.from.start, n)}, ${T.range(o.from.start, o.from.end)} · ${T.dur(o.mins)}</p>
+        <p class="small">${esc(o.reason)} Nothing changes unless you accept.</p>
+        <div class="row"><button class="btn small" data-action="offerAccept" aria-label="Accept: move ${esc(o.title)} to ${T.rel(o.to.start, n)} ${T.timeShort(o.to.start)}">${ICON.check} Accept</button><button class="btn small ghost" data-action="offerDecline" aria-label="Decline: keep ${esc(o.title)} where it is">Decline</button></div>
       </section>`;
   }
 
@@ -2511,7 +2531,7 @@
           break;
         }
         case 'replan': triggers.push('Replan the rest of the plan'); break;
-        case 'complete': if (t) { S.completeTask(state, t.id); triggers.push(`Completed: ${t.title}`); } break;
+        case 'complete': if (t) { S.finishTask(state, t.id); triggers.push(`Completed: ${t.title}`); } break;   // freed time is suggested afterwards, like Done
         case 'complete_part': if (t) { S.completePart(state, t.id, it.partId); triggers.push(`Finished: ${t.title} — ${it.partTitle}`); } break;
         case 'partial': if (t) { S.setTaskRemaining(state, t.id, it.remainingMins); triggers.push(`Partly done: ${t.title} (${T.dur(S.taskRemaining(t))} left)`); } break;
         case 'extend': if (t) { S.extendTask(state, t.id, it.addMins); triggers.push(`More time for ${t.title} (+${T.dur(it.addMins)})`); } break;
@@ -2642,7 +2662,7 @@
         <div><dt>Planned now</dt><dd>${rec.current ? `${whenFull(rec.current.start)} – ${T.time(rec.current.end)}` : 'Not planned'}</dd></div>
         <div><dt>Due</dt><dd>${t.deadline != null ? `${T.short(t.deadline)}, ${T.time(t.deadline)}` : 'Not set'}</dd></div>
       </dl>
-      <div class="status-panel adj-rec" role="status">${ICON.step}<div><b>${rec.start != null ? `Recommended: <span class="num">${whenFull(rec.start)}</span>` : 'No better time found'}</b><p>${esc(rec.reason)}</p>
+      <div class="status-panel adj-rec" role="status">${ICON.step}<div><b>${rec.start != null ? `Recommended: ${rec.basis === 'keep' ? 'keep ' : ''}<span class="num">${whenFull(rec.start)}</span>` : 'No better time found'}</b><p>${esc(rec.reason)}</p>
         ${rec.start != null ? `<button class="btn small" data-action="adjustUse" data-start="${rec.start}" ${usingRec ? 'disabled' : ''}>${usingRec ? `${ICON.check} Using recommended time` : 'Use recommended time'}</button>` : ''}</div></div>
       <div class="form">${dtField('sheet.start', sh.start, { label: 'Start at', rerender: true, defTime: T.timeInput(rec.start != null ? rec.start : T.ceilTo(now(), 60)), hint: 'Choose another time if you prefer. The plan below is worked out again.' })}</div>
       ${body}
@@ -3117,7 +3137,7 @@
       const s = S.findSession(state, ds.id);
       S.completeSession(state, ds.id);
       ui.celebrate = true;
-      settle(ds.id, () => toast(`"${s.title}" is done. Your plan has been updated.`, { undo: true }));
+      settle(ds.id, () => toast(state.offer && state.offer.status === 'pending' ? `"${s.title}" is done. There is a suggestion for the time you freed.` : `"${s.title}" is done. Your plan has been updated.`, { undo: true }));
     },
     snooze(ds) {
       snapshot('Snooze');
@@ -3126,6 +3146,32 @@
       const moved = state.plan.find((x) => x.unitId === s.unitId);
       render();
       toast(moved ? `Moved "${s.title}" to ${T.rel(moved.start, now())} ${T.timeShort(moved.start)}.` : `"${s.title}" no longer fits before its deadline — see the alert.`, { undo: true });
+    },
+    // --- early-finish suggestion: optional, so it is applied only on Accept, after being worked out again
+    offerAccept() {
+      if (!state.offer || state.offer.status !== 'pending') { render(); return; }
+      const title = state.offer.title;
+      const before = JSON.stringify(state);
+      const res = S.acceptOffer(state);
+      if (!res.ok) {                                       // the plan changed since the card was drawn: nothing was applied
+        render();
+        toast(res.offer ? 'Your plan changed, so the suggestion was worked out again. Have a look before accepting.' : `That time is no longer free for "${title}". Nothing was changed.`);
+        return;
+      }
+      const copy = JSON.parse(before); delete copy.obDraft;
+      undoSnap = { label: 'Suggestion', json: JSON.stringify(copy) };
+      res.draft.engineLog = state.engineLog;
+      state = res.draft;
+      ui.overloadSig = overloadSig();
+      render();
+      planToast();
+    },
+    offerDecline() {
+      if (!state.offer) return;
+      const title = state.offer.title;
+      S.declineOffer(state);
+      render();
+      toast(`Kept as it was. "${title}" stays where it is planned.`);
     },
     // --- check-ins: a block ended without a report
     ckDone(ds) {
@@ -3289,9 +3335,8 @@
     completeTask() {
       const t = taskById(ui.sheet.id);
       snapshot('Complete task');
-      S.completeTask(state, t.id);
       ui.sheet = null;
-      S.replan(state, `Completed: ${t.title}`);
+      S.finishTask(state, t.id);                            // if that is ahead of its planned time, the freed time is offered, not taken
       ui.celebrate = true;
       render();
       toast('Task marked done.', { undo: true });
@@ -3453,7 +3498,7 @@
       const f = ui.sheet.form;
       ui.formDraft = f && (f.title.trim() || (f.notes || '').trim() || f.deadline != null) ? f : null;
     }
-    if (ui.sheet.type === 'proposal') ui.dumpDraft = ownDraft(ui.sheet.review.text);
+    if (ui.sheet.type === 'proposal' && ui.sheet.review) ui.dumpDraft = ownDraft(ui.sheet.review.text);   // a check-in or adjusted-plan proposal has no typed text behind it
   }
 
   /** The student has said how the session went: record it, update the task and replan. */
@@ -3465,7 +3510,7 @@
     snapshot('End session');
     S.endFocus(state, { outcome, remainingMins, focusedMins });
     ui.focusPartial = false;
-    const say = () => toast(outcome === 'complete' ? `"${s.title}" is done. Your plan has been updated.`
+    const say = () => toast(outcome === 'complete' ? (state.offer && state.offer.status === 'pending' ? `"${s.title}" is done. There is a suggestion for the time you freed.` : `"${s.title}" is done. Your plan has been updated.`)
       : outcome === 'partial' ? `Progress saved. ${T.dur(remainingMins)} is back in your plan.`
       : 'Session recorded. The work is still on your plan.', { undo: true });
     if (outcome === 'complete') { ui.celebrate = true; settle(s.id, say); return; }

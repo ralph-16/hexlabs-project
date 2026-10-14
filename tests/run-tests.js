@@ -1114,21 +1114,57 @@ const tightMonday = () => { T.now = () => at(12, 9, 5); const st = demo(); T.now
 const named = (st, title) => st.tasks.find((t) => t.title === title);
 const risky = (st, t) => conf(st).filter((r) => r.taskId === t.id && r.show).map((r) => r.level);
 const startOf = (st, t) => (of(st, t)[0] || {}).start;
-test('an at-risk task gets a recommended time from the real plan, and nothing changes until it is accepted', () => {
-  const st = tightMonday(), a = named(st, 'Algorithm Tracing Worksheet'), before = JSON.stringify(st);
-  eq(risky(st, a), ['risk'], 'the starting point: at risk today');
-  const rec = S.recommendAdjustment(st, a.id);
-  eq([rec.title, rec.mins, rec.remainingMins, rec.current.start, rec.basis, rec.start], ['Algorithm Tracing Worksheet', 60, 60, at(12, 12, 15), 'later_day', at(13, 18, 15)]);
-  ok(/Today is too tight for 1 hr of work\. Tomorrow at 6:15 PM is the next open time/.test(rec.reason), rec.reason);
-  eq(S.checkStart(st, { mins: rec.mins, deadline: a.deadline }, rec.start).ok, true, 'the recommendation is itself a valid time');
-  const p = S.previewMove(st, a.id, rec.start);
-  ok(p.ok && p.draft.lastUpdate.changes.some((c) => c.title === 'Class Diagram Exercise') && /One other task moves to make room/.test(p.draft.lastUpdate.notes.join(' ')), 'the preview lists what else moves');
+test('an at-risk task gets a recommendation from whole-plan comparison, and nothing changes until it is accepted', () => {
+  const st = blank(at(12, 19, 40));
+  const a = add(st, 'A', at(14, 17), 60), b = add(st, 'B', at(14, 17), 60);
+  S.replan(st, 'start');
+  eq([startOf(st, a), startOf(st, b), risky(st, a), risky(st, b)], [at(12, 19, 45), at(12, 21), [], ['high']], 'the starting point: B is the second task tonight and at risk');
+  const before = JSON.stringify(st), rec = S.recommendAdjustment(st, b.id);
+  eq([rec.title, rec.mins, rec.remainingMins, rec.current.start, rec.basis, rec.start, rec.newRisks], ['B', 60, 60, at(12, 21), 'later_day', at(13, 6), []]);
+  ok(/Today is too tight for 1 hr of work\. Tomorrow at 6 AM is the next open time and still before its deadline/.test(rec.reason) && /leaves no task at risk today instead of 1/.test(rec.reason), rec.reason);
+  eq(S.checkStart(st, { mins: rec.mins, deadline: b.deadline }, rec.start).ok, true, 'the recommendation is itself a valid time');
+  const swap = S.previewMove(st, b.id, at(12, 19, 45));
+  ok(swap.ok, JSON.stringify(swap).slice(0, 200));
+  ok(swap.ok && risky(swap.draft, swap.draft.tasks[0]).length === 1, 'starting B first tonight would only hand the risk to A, which is why that is not the recommendation');
+  const p = S.previewMove(st, b.id, rec.start);
   eq(JSON.stringify(st), before, 'recommending and previewing change nothing');
-  const d = p.draft, a2 = named(d, a.title);
-  eq([startOf(d, a2), planned(d, a2), a2.pinnedStart], [rec.start, 60, rec.start], 'accepted: the task is where it was recommended');
-  ok(accounted(d)); eq(planProblems(d), []); eq(fixedOn(d, at(12, 0)), fixedOn(st, at(12, 0)));
-  eq([risky(d, a2), S.taskStatus(d, a2).key, S.taskStatus(d, a2).attention], [[], 'scheduled', false], 'no warning is left on it: not at risk, not "won\'t fit today"');
-  const r = reload(d); eq([risky(r, named(r, a.title)), S.taskStatus(r, named(r, a.title)).key], [[], 'scheduled'], 'and none comes back after a reload');
+  const d = p.draft, [a2, b2] = d.tasks;
+  eq([startOf(d, b2), planned(d, b2), b2.pinnedStart, startOf(d, a2)], [rec.start, 60, rec.start, at(12, 19, 45)], 'accepted: B is where it was recommended and A did not move');
+  ok(whole(d)); eq(planProblems(d), []);
+  eq([risky(d, a2), risky(d, b2), S.taskStatus(d, b2).key, S.taskStatus(d, b2).attention], [[], [], 'scheduled', false], 'no task is at risk in the accepted plan');
+  const r = reload(d); eq([risky(r, r.tasks[1]), S.taskStatus(r, r.tasks[1]).key], [[], 'scheduled'], 'and no warning comes back after a reload');
+});
+test('when every other time only moves the risk to another task, the recommendation is to stay put', () => {
+  const st = blank(at(12, 19, 40));
+  const a = add(st, 'A', at(12, 22), 60), b = add(st, 'B', at(12, 22), 60);   // both due tonight: no later day is possible
+  S.replan(st, 'start');
+  const rec = S.recommendAdjustment(st, b.id);
+  eq([rec.basis, rec.start, risky(st, b).length], ['keep', at(12, 21), 1]);
+  ok(/is the best available: every other open time would leave as many tasks at risk, or more/.test(rec.reason) && /It stays tight today/.test(rec.reason), rec.reason);
+});
+test('overdue work is recommended into today\'s earliest opening, ahead of everything else', () => {
+  const st = tightMonday(), a = named(st, 'Algorithm Tracing Worksheet');
+  eq([startOf(st, a), risky(st, a)], [at(12, 12, 15), ['risk']], 'it already holds today\'s first opening and is tight');
+  const rec = S.recommendAdjustment(st, a.id);
+  eq([rec.basis, rec.start], ['keep', at(12, 12, 15)], 'so it stays today; tomorrow is not recommended');
+  ok(/already today's earliest open time for it, and overdue work goes first/.test(rec.reason), rec.reason);
+  // the same task after the student pushed it to tomorrow: the recommendation brings it back to today
+  const st2 = tightMonday(), a2 = named(st2, a.title);
+  S.applyTaskAction(st2, { type: 'move', taskId: a2.id, day: at(13, 0) }); S.replan(st2, 'pushed to tomorrow');
+  ok(T.dayStart(startOf(st2, a2)) === at(13, 0), 'planned tomorrow');
+  const rec2 = S.recommendAdjustment(st2, a2.id);
+  eq([rec2.basis, T.dayStart(rec2.start)], ['earlier_today', at(12, 0)]); ok(/It is overdue, so it goes into today's earliest open time/.test(rec2.reason), rec2.reason);
+  const p = S.previewMove(st2, a2.id, rec2.start); ok(p.ok && accounted(p.draft)); eq(planProblems(p.draft), []);
+});
+test('overdue work goes to a later day only when today truly has no opening, and the reason says what is in the way', () => {
+  const st = blank(at(12, 21, 30));
+  const o = add(st, 'Old', at(11, 17), 60); S.replan(st, 'start');
+  eq(T.dayStart(startOf(st, o)), at(13, 0), 'half an hour is left today, so the engine planned it tomorrow');
+  const rec = S.recommendAdjustment(st, o.id);
+  eq([rec.start, T.dayStart(rec.start)], [startOf(st, o), at(13, 0)]);
+  ok(/Today has only 30 min of open time left before 10 PM, and no single opening long enough for 1 hr of work/.test(rec.reason), rec.reason);
+  const st2 = blank(at(12, 21, 58)); const o2 = add(st2, 'Old', at(11, 17), 60); S.replan(st2, 'start');
+  ok(/Today has no open time left before 10 PM/.test(S.recommendAdjustment(st2, o2.id).reason));
 });
 test('the student can choose another time; the proposal is worked out again, across days', () => {
   const st = tightMonday(), a = named(st, 'Algorithm Tracing Worksheet'), before = JSON.stringify(st);
@@ -1169,7 +1205,7 @@ test('adding a task and editing one both reflow the plan through the same engine
   // editing the start time moves it again and closes the gap it leaves
   const p = S.previewMove(st, n.id, at(13, 9)); ok(p.ok, 'check 3'); const d = p.draft, [a2, b2, n2] = d.tasks;
   eq(startOf(d, n2), at(13, 9), 'New is on Tuesday now');
-  ok(startOf(d, a2) === startOf(st, a) && startOf(d, b2) === startOf(st, b), 'A and B were still valid and in order, so they stay where they were');
+  ok(startOf(d, a2) < startOf(st, a) && startOf(d, b2) < startOf(st, b) && startOf(d, a2) < startOf(d, b2), 'A and B move up into the time it left, still in deadline order');
   ok(whole(d), 'check 4'); eq(planProblems(d), []);
   // a longer duration takes the room it needs and pushes what follows
   S.applyTaskAction(d, { type: 'set_duration', taskId: a2.id, mins: 150 }); S.replan(d, 'longer');
@@ -1204,6 +1240,263 @@ test('a commitment that starts right at the end of the day still gets its 15-min
   const t = add(st, 'Essay', at(13, 17), 105); S.replan(st, 'start');
   ok(of(st, t).every((s) => s.end <= at(12, 21, 45) || s.start >= at(13, 2, 15)), `ends by 9:45 PM or starts after the shift: ${of(st, t).map((s) => T.when(s.start, st.now))}`);
   eq(planned(st, t), 105);
+});
+
+console.log('\nCompaction: closing a gap a change opened, and nothing else');
+const three = () => { const st = blank(at(12, 9)); const a = add(st, 'A', at(13, 17), 60), b = add(st, 'B', at(14, 17), 60), c = add(st, 'C', at(15, 17), 60); S.replan(st, 'start'); return { st, a, b, c }; };
+const starts = (st, list) => list.map((t) => startOf(st, t));
+test('a flexible session moves into an earlier gap that a change opened, in deadline order', () => {
+  const { st, a, b, c } = three();
+  eq(starts(st, [a, b, c]), [at(12, 9), at(12, 10, 15), at(12, 11, 30)]);
+  S.completeTask(st, a.id); S.replan(st, 'A finished early');
+  eq(starts(st, [b, c]), [at(12, 9), at(12, 10, 15)], 'B takes the gap and C follows, each a buffer apart');
+  ok(whole(st)); eq(planProblems(st), []);
+  eq(st.lastUpdate.changes.filter((x) => x.from && x.to).map((x) => x.title).sort(), ['B', 'C'], 'the moves are reported as was → now');
+});
+test('compaction leaves sessions alone when moving would break a rule or is not worth the churn', () => {
+  let f;
+  // a time the student asked for stays, and work due later does not jump ahead of it by compaction alone
+  f = three(); S.applyTaskAction(f.st, { type: 'move', taskId: f.b.id, start: at(12, 14) }); S.replan(f.st, 'B pinned at 2 PM');
+  S.applyTaskAction(f.st, { type: 'cancel_task', taskId: f.a.id }); S.replan(f.st, 'A removed');
+  eq(startOf(f.st, f.b), at(12, 14), 'the requested start is kept'); eq(planProblems(f.st), []);
+  // a gain of less than half an hour is not worth a move
+  const st = blank(at(12, 9)); const x = add(st, 'X', at(13, 17), 20), y = add(st, 'Y', at(14, 17), 60); S.replan(st, 'start');
+  const yBefore = startOf(st, y); S.applyTaskAction(st, { type: 'cancel_task', taskId: x.id }); S.replan(st, 'X removed');
+  ok(yBefore - at(12, 9) > 30 * T.MIN || startOf(st, y) === yBefore, `Y: ${T.time(yBefore)} → ${T.time(startOf(st, y))}`);
+  const st3 = blank(at(12, 9)); const x3 = add(st3, 'X', at(13, 17), 15), y3 = add(st3, 'Y', at(14, 17), 60); S.replan(st3, 'start');
+  const y3Before = startOf(st3, y3); S.applyTaskAction(st3, { type: 'set_duration', taskId: x3.id, mins: 5 }); S.replan(st3, 'X shorter');
+  eq(startOf(st3, y3), y3Before, 'ten minutes gained: Y stays where it was');
+  // a session is not split into more sittings just to start sooner
+  const ev = evening(at(12, 18)); S.addEvent(ev, { title: 'Club', start: at(12, 19, 30), end: at(12, 22) });
+  const s1 = add(ev, 'Short', at(13, 22), 60), long = add(ev, 'Long', at(14, 22), 120); S.replan(ev, 'start');
+  eq([startOf(ev, s1), dayOf(ev, long)], [at(12, 18), [13]]);
+  S.applyTaskAction(ev, { type: 'cancel_task', taskId: s1.id }); S.replan(ev, 'Short removed');
+  eq([dayOf(ev, long), of(ev, long).length], [[13], 1], 'two hours do not fit the 75 minutes that opened tonight, so Long is not broken up'); eq(planProblems(ev), []);
+  // a step never moves ahead of the step before it
+  const dp = blank(at(12, 9)); const first = add(dp, 'First', at(14, 17), 60), g = add(dp, 'Gap', at(13, 17), 60), dep = add(dp, 'Then', at(15, 17), 60); dep.dependencies = [first.id];
+  S.replan(dp, 'start'); S.applyTaskAction(dp, { type: 'cancel_task', taskId: g.id }); S.replan(dp, 'Gap removed');
+  ok(startOf(dp, dep) >= of(dp, first).slice(-1)[0].end + 15 * T.MIN, 'the dependant still follows what it depends on'); eq(planProblems(dp), []);
+});
+test('after compaction every hard rule still holds, including the gap before a 10 PM commitment', () => {
+  const st = blank(at(12, 18));
+  S.addEvent(st, { title: 'Night shift', start: at(12, 22), end: at(13, 2) });
+  const a = add(st, 'A', at(13, 17), 60), b = add(st, 'B', at(13, 17), 60), c = add(st, 'C', at(13, 17), 90);
+  S.replan(st, 'start');
+  ok(st.plan.filter((s) => T.dayStart(s.start) === at(12, 0)).every((s) => s.end <= at(12, 21, 45)), 'nothing tonight ends later than 9:45 PM');
+  S.completeTask(st, a.id); S.replan(st, 'A finished early');
+  ok(st.plan.every((s) => s.end <= at(12, 21, 45) || s.start >= at(13, 2, 15)), `after the plan closed up, still clear of the shift: ${st.plan.map((s) => s.title + ' ' + T.when(s.start, st.now) + '–' + T.time(s.end))}`);
+  ok(whole(st)); eq(planProblems(st), []);
+  const v = S.checkStart(st, { mins: 60, deadline: b.deadline }, at(12, 21));
+  eq([v.ok, v.code], [false, 'FIXED']); ok(/Night shift/.test(v.message) && v.alt + 60 * T.MIN <= at(12, 21, 45), 'a start at 9 PM is refused, and the closest time ends by 9:45 PM');
+  eq(S.checkStart(st, { mins: 60, deadline: b.deadline }, at(12, 20, 45)).ok, true, '8:45 PM for an hour is allowed');
+  eq(S.previewMove(st, b.id, at(12, 21)).ok, false, 'Adjust schedule applies the same rule');
+});
+test('a requested start and the deadline order both survive a reflow with compaction', () => {
+  const { st, a, b, c } = three();
+  const hi = add(st, 'Urgent', at(12, 20), 60); hi.priority = 'high';
+  const p = S.previewMove(st, c.id, at(12, 15)); ok(p.ok); const d = p.draft, [a2, b2, c2, h2] = d.tasks;
+  eq(startOf(d, c2), at(12, 15), 'C is at the time asked for');
+  ok(startOf(d, h2) < startOf(d, a2) && startOf(d, a2) < startOf(d, b2), 'due tonight, then tomorrow, then the day after: the flexible tasks stay in deadline order');
+  for (const t of [a2, b2, c2, h2]) ok(of(d, t).slice(-1)[0].end <= t.deadline, `${t.title} on time`);
+  ok(whole(d)); eq(planProblems(d), []);
+  S.applyTaskAction(d, { type: 'cancel_task', taskId: a2.id }); S.replan(d, 'A removed');
+  eq(startOf(d, c2), at(12, 15), 'and C stays at its requested time when the plan closes up around it'); eq(planProblems(d), []);
+});
+
+console.log('\nFinishing early: an offer the student accepts or declines, never an automatic move');
+/** A 9–11, B 11:15–12:15, C 12:30–1:30 on Monday; A is then finished at 9:20. */
+const earlyDay = (prep) => {
+  const st = blank(at(12, 9));
+  const a = add(st, 'A', at(13, 17), 120), b = add(st, 'B', at(14, 17), 60), c = add(st, 'C', at(15, 17), 60);
+  if (prep) prep(st, a, b, c);
+  S.replan(st, 'start');
+  const before = starts(st, [b, c]);
+  st.now = at(12, 9, 20); S.completeSession(st, of(st, a)[0].id);
+  return { st, a, b, c, before };
+};
+test('finishing early makes one suggestion and moves no other task', () => {
+  const { st, a, b, c, before } = earlyDay();
+  eq(before, [at(12, 11, 15), at(12, 12, 30)]);
+  eq([a.status, credit(st, a)], ['done', 120], 'the finished task is recorded as usual');
+  eq(starts(st, [b, c]), before, 'B and C are exactly where they were');
+  const o = st.offer;
+  eq([o.status, o.title, o.taskId, o.from.start, o.to.start, o.to.end, o.mins], ['pending', 'B', b.id, at(12, 11, 15), at(12, 9, 35), at(12, 10, 35), 60], 'B, the next task by deadline, is suggested for the freed time');
+  eq(o.to.start - st.now, 15 * T.MIN, 'the suggested start is a full 15-minute buffer after the moment the work actually ended, not after its planned end');
+  ok(/You finished "A" early/.test(o.reason) && /next task by deadline/.test(o.reason) && /No other task would move/.test(o.reason), o.reason);
+  eq([b.status, credit(st, b), b.remainingMins, b.pinnedStart], ['pending', 0, 60, null], 'the suggestion itself changes nothing about B');
+  eq(typeof st.offer, 'object'); ok(!Array.isArray(st.offer), 'one suggestion at a time');
+});
+test('no suggestion when nothing suitable fits the freed time', () => {
+  // too little time: 25 minutes are left after the buffer, and B needs an hour
+  const st = blank(at(12, 9)); const a = add(st, 'A', at(13, 17), 60), b = add(st, 'B', at(14, 17), 60); S.replan(st, 'start');
+  st.now = at(12, 9, 20); S.completeSession(st, of(st, a)[0].id);
+  eq([st.offer, startOf(st, b)], [null, at(12, 10, 15)], 'B needs an hour; it is not squeezed in or split');
+  // a fixed commitment takes the freed time
+  const f = earlyDay((st2) => S.addEvent(st2, { title: 'Meeting', start: at(12, 11, 30), end: at(12, 13) }));
+  ok(f.st.offer == null || (f.st.offer.to.end <= at(12, 11, 15)), 'nothing is suggested into, or within a buffer of, the meeting');
+  // finishing late frees nothing
+  const l = blank(at(12, 9)); const la = add(l, 'A', at(13, 17), 60); add(l, 'B', at(14, 17), 60); S.replan(l, 'start');
+  l.now = at(12, 10, 5); S.completeSession(l, of(l, la)[0].id); eq(l.offer, null);
+  // a time the student asked for is not suggested away: the next task in line is offered instead
+  const p = earlyDay((st2, a2, b2) => { b2.pinnedStart = at(12, 14); });
+  eq([p.st.offer && p.st.offer.title, startOf(p.st, p.b)], ['C', at(12, 14)], 'B keeps its requested 2 PM; C is the suggestion');
+  // a move that would put a task at risk is not suggested
+  const r = blank(at(12, 19)); const ra = add(r, 'A', at(13, 9), 60), rb = add(r, 'B', at(14, 9), 60); S.replan(r, 'start'); rb.notBefore = at(13, 6); S.replan(r, 'B tomorrow');
+  r.now = at(12, 19, 5); S.completeSession(r, of(r, ra)[0].id);
+  ok(r.offer == null || conf(r).filter((x) => x.show).length === 0, 'either nothing is offered, or what is offered leaves no task at risk');
+});
+test('accepting applies exactly that move, after checking it again, and completes nothing', () => {
+  const { st, b, c, before } = earlyDay();
+  const res = S.acceptOffer(st);
+  ok(res.ok, JSON.stringify(res).slice(0, 200)); eq(starts(st, [b, c]), before, 'nothing changes until the result is swapped in');
+  const d = res.draft, [, b2, c2] = d.tasks;
+  eq([startOf(d, b2), startOf(d, c2), d.offer], [at(12, 9, 35), before[1], null], 'B moved to the suggested time; C did not move');
+  eq([b2.status, b2.remainingMins, credit(d, b2), b2.pinnedStart], ['pending', 60, 0, null], 'accepting does not mark B done, credit it, or pin it');
+  ok(whole(d)); eq(planProblems(d), []);
+  eq(d.lastUpdate.changes.filter((x) => x.from && x.to).map((x) => x.title), ['B'], 'the plan update shows one move, was → now');
+  eq(S.acceptOffer(d).ok, false, 'it cannot be applied a second time');
+  const after = JSON.stringify(d.plan.map((x) => [x.unitId, x.start]));
+  tick(d, at(12, 9, 21)); tick(d, at(12, 9, 50)); S.replan(d, null);
+  eq(JSON.stringify(d.plan.map((x) => [x.unitId, x.start])), after, 'time passing afterwards does not quietly pull C into the time B left');
+});
+test('declining keeps the plan, and the same suggestion does not come back by itself', () => {
+  let { st, b, c, before } = earlyDay();
+  S.declineOffer(st);
+  eq([st.offer.status, starts(st, [b, c])], ['declined', before]);
+  tick(st, at(12, 9, 21)); tick(st, at(12, 9, 40)); S.replan(st, null); st = reload(st);
+  const [, b2, c2] = st.tasks;
+  eq([st.offer.status, starts(st, [b2, c2])], ['declined', before], 'ticks, a routine recalculation and a reload: still declined, and B was not moved into the gap anyway');
+  eq(S.acceptOffer(st).ok, false, 'a declined suggestion cannot be accepted');
+  // another change the student makes is a reason to look again
+  S.applyTaskAction(st, { type: 'set_priority', taskId: c2.id, priority: 'low' }); S.replan(st, 'C is low priority');
+  eq([st.offer && st.offer.status, st.offer && st.offer.title, startOf(st, b2)], ['pending', 'B', before[0]], 'looked at again: B is suggested once more, and still not moved without a yes');
+  tick(st, at(12, 11, 5)); eq(st.offer, null, 'once the freed time has passed, the suggestion is gone');
+});
+test('a suggestion that the plan has overtaken is worked out again, never applied as it was', () => {
+  const { st, b, c } = earlyDay();
+  const stale = JSON.parse(JSON.stringify(st.offer));
+  S.applyTaskAction(st, { type: 'move', taskId: b.id, day: at(13, 0) }); S.replan(st, 'the student moved B to tomorrow');
+  ok(T.dayStart(startOf(st, b)) === at(13, 0), 'B is where the student put it');
+  ok(st.offer == null || st.offer.title !== 'B' || st.offer.from.start === startOf(st, b), 'the suggestion was looked at again against the new plan');
+  st.offer = stale;                                             // as if an old card were still on screen
+  const res = S.acceptOffer(st), bStart = startOf(st, b);
+  ok(!res.ok || (res.draft && startOf(res.draft, res.draft.tasks[1]) !== stale.to.start) || stale.from.start === bStart, 'the old suggestion is not applied over the newer decision');
+  eq(T.dayStart(startOf(st, b)), at(13, 0), 'B stays on the day the student chose');
+  ok(st.offer == null || st.offer.from.start !== stale.from.start, 'what is pending now is the up-to-date suggestion, or none');
+});
+test('required repairs still happen at once while a suggestion waits', () => {
+  const { st, b, c } = earlyDay();
+  ok(st.offer && st.offer.status === 'pending');
+  S.addEvent(st, { title: 'Lab', start: at(12, 12, 15), end: at(12, 14) }); S.replan(st, 'a lab was added over C');
+  ok(of(st, c).every((s) => s.end <= at(12, 12) || s.start >= at(12, 14, 15)), `C was moved clear of the lab straight away: ${T.when(startOf(st, c), st.now)}`);
+  ok(whole(st)); eq(planProblems(st), []);
+  const big = add(st, 'Due soon', at(12, 12), 90); S.replan(st, 'urgent work added');
+  ok(planned(st, big) === 90 && of(st, big).slice(-1)[0].end <= big.deadline, 'new urgent work is placed, in the freed time if that is what it takes'); eq(planProblems(st), []);
+  S.declineOffer(st); const x = add(st, 'Tiny', at(12, 20), 30); S.replan(st, 'another task'); ok(planned(st, x) === 30, 'and a declined suggestion blocks nothing either');
+});
+test('marking a whole task done early offers the freed time in the same way', () => {
+  const st = blank(at(12, 9)); const a = add(st, 'A', at(13, 17), 120), b = add(st, 'B', at(14, 17), 60); S.replan(st, 'start');
+  const bStart = startOf(st, b); st.now = at(12, 9, 5); S.finishTask(st, a.id);
+  eq([a.status, startOf(st, b), st.offer && st.offer.title, st.offer && st.offer.to.start], ['done', bStart, 'B', at(12, 9, 15)]);
+  eq(planProblems(st), []);
+});
+
+console.log('\nEarly finishes one after another: every one asks, none moves anything by itself');
+const monWeek = () => { T.now = () => at(12, 9, 5); const st = demo(); T.now = () => FIXED_NOW; return st; };
+const snapPlan = (st) => st.plan.filter((x) => x.end > st.now).map((x) => `${x.title}@${x.start}`).sort();
+const othersSame = (before, after, title) => JSON.stringify(before.filter((x) => !x.startsWith(title + '@'))) === JSON.stringify(after.filter((x) => !x.startsWith(title + '@')));
+const finishNext = (st) => { const n = E.nextSession(st.plan, st.now); S.completeSession(st, n.id); return n; };
+test('A: the first early finish records the work, moves nothing and makes one suggestion', () => {
+  const st = monWeek(), before = snapPlan(st);
+  const n = finishNext(st), t = st.tasks.find((x) => x.id === n.taskId);
+  eq([n.title, t.status, credit(st, t)], ['Algorithm Tracing Worksheet', 'done', 60]);
+  ok(othersSame(before, snapPlan(st), n.title), 'every other task is where it was');
+  eq([st.offer.status, st.offer.title, st.offer.to.start], ['pending', 'Class Diagram Exercise', at(12, 12, 15)]);
+  eq(planProblems(st), []);
+});
+test('B and D: after accepting, the next early finish asks again, and only the named task ever moves', () => {
+  let st = monWeek();
+  const seen = [];
+  for (let k = 0; k < 3; k++) {
+    const before = snapPlan(st);
+    const n = finishNext(st);
+    const afterDone = snapPlan(st);
+    ok(othersSame(before, afterDone, n.title), `finish ${k + 1} (${n.title}) moved no other task`);
+    ok(st.offer && st.offer.status === 'pending', `finish ${k + 1} produced a fresh suggestion`);
+    const o = st.offer; seen.push(o.title);
+    const t = named(st, o.title); eq([startOf(st, t), t.pinnedStart], [o.from.start, null], `${o.title} has not moved before the yes`);
+    const r = S.acceptOffer(st); ok(r.ok); st = r.draft;
+    ok(othersSame(afterDone, snapPlan(st), o.title), `accepting suggestion ${k + 1} moved only ${o.title}`);
+    eq(startOf(st, named(st, o.title)), o.to.start); eq(st.offer, null); eq(planProblems(st), []); ok(accounted(st));
+  }
+  eq(seen, ['Class Diagram Exercise', 'Big-O Worksheet', 'Use Case Diagram'], 'each finish was looked at on its own, in rank order of what fits');
+});
+test('C and J: a task planned for tomorrow is suggested for today, stays put until accepted, and time passing never moves it or anything else', () => {
+  let st = monWeek();
+  for (let k = 0; k < 2; k++) { finishNext(st); st = S.acceptOffer(st).draft; }
+  const before = snapPlan(st); finishNext(st);
+  const uc = named(st, 'Use Case Diagram'), erd = named(st, 'ERD and Business Rules');
+  eq([st.offer.title, T.dayStart(st.offer.from.start), st.offer.to.start, T.dayStart(startOf(st, uc))], ['Use Case Diagram', at(13, 0), at(12, 12, 15), at(13, 0)], 'tomorrow → today, offered, not applied');
+  const waiting = snapPlan(st);
+  tick(st, at(12, 9, 6)); tick(st, at(12, 9, 30)); S.replan(st, null); st = reload(st); tick(st, at(12, 9, 45));
+  eq(snapPlan(st), waiting, 'unanswered: ticks, a routine recalculation and a reload moved nothing');
+  const declined = S.clone(st); S.declineOffer(declined); tick(declined, at(12, 10));
+  eq([T.dayStart(startOf(declined, named(declined, 'Use Case Diagram'))), snapPlan(declined).length], [at(13, 0), waiting.length], 'declined: it stays tomorrow');
+  const r = S.acceptOffer(st); ok(r.ok); st = r.draft;
+  eq([startOf(st, named(st, 'Use Case Diagram')), T.dayStart(startOf(st, named(st, 'ERD and Business Rules')))], [at(12, 12, 15), at(13, 0)], 'accepted: it is today; ERD has not moved');
+  const accepted = snapPlan(st);
+  tick(st, at(12, 9, 50)); tick(st, at(12, 10, 30)); S.replan(st, null); st = reload(st); tick(st, at(12, 11));
+  eq(snapPlan(st), accepted, 'the regression: a later clock tick no longer pulls ERD and Business Rules into tonight by itself');
+  eq(planProblems(st), []); ok(accounted(st));
+});
+test('E: a declined suggestion stays declined, but a separate early finish is looked at on its own', () => {
+  const st = monWeek(); finishNext(st);
+  const declinedTitle = st.offer.title; S.declineOffer(st);
+  const plan0 = snapPlan(st); tick(st, at(12, 9, 10)); S.replan(st, null);
+  eq([st.offer.status, snapPlan(st)], ['declined', plan0]);
+  const cd = named(st, 'Class Diagram Exercise'); S.completeSession(st, of(st, cd)[0].id);   // a second, separate early finish (its 6:15 PM block)
+  ok(st.offer && st.offer.status === 'pending' && st.offer.gap.start === at(12, 18, 15), `the new finish has its own suggestion: ${st.offer && st.offer.title}`);
+  ok(othersSame(plan0.filter((x) => !x.startsWith('Class Diagram Exercise@')), snapPlan(st), 'none'), 'and nothing moved');
+  eq(declinedTitle, 'Class Diagram Exercise');
+});
+test('F: every way of finishing early goes through the same suggestion', () => {
+  const paths = {
+    'Done': (st, n) => S.completeSession(st, n.id),
+    'Focus Mode: Yes, it is complete': (st, n) => { S.startSession(st, n.id, { method: 'none' }); S.endFocus(st, { outcome: 'complete', focusedMins: 20 }); },
+    'Mark whole task done': (st, n) => S.finishTask(st, n.taskId),
+  };
+  for (const [name, finish] of Object.entries(paths)) {
+    const st = monWeek(), before = snapPlan(st), n = E.nextSession(st.plan, st.now);
+    finish(st, n);
+    const t = st.tasks.find((x) => x.id === n.taskId);
+    eq([name, t.status, credit(st, t)], [name, 'done', 60]);
+    ok(othersSame(before, snapPlan(st), n.title), `${name}: no other task moved`);
+    eq([name, st.offer && st.offer.status, st.offer && st.offer.title], [name, 'pending', 'Class Diagram Exercise']);
+  }
+});
+test('G: finishing at or after the planned end frees nothing and suggests nothing', () => {
+  const st = monWeek(), n = E.nextSession(st.plan, st.now);
+  st.now = n.end; S.completeSession(st, n.id); eq(st.offer, null, 'exactly at the end');
+  const st2 = monWeek(); tick(st2, at(12, 13, 30)); S.checkinDone(st2, st2.checkins[0].ck); eq(st2.offer, null, 'a check-in answered after the block ended');
+});
+test('H: moving work earlier is asked for; a repair that a change makes necessary is not', () => {
+  const st = monWeek(); finishNext(st);
+  const erd = named(st, 'ERD and Business Rules'), erdBefore = startOf(st, erd);
+  eq(T.dayStart(erdBefore), at(13, 0), 'ERD has a valid slot tomorrow, so nothing pulls it into today without a yes');
+  S.addEvent(st, { title: 'Work shift', kind: 'work', start: at(13, 18), end: at(13, 22) }); S.replan(st, 'a shift tomorrow evening');
+  ok(startOf(st, erd) !== erdBefore && of(st, erd).slice(-1)[0].end <= erd.deadline, `the shift displaced ERD, so it was re-placed at once: ${T.when(startOf(st, erd), st.now)}`);
+  eq(planProblems(st), []); ok(accounted(st));
+});
+test('I: a suggestion the plan has overtaken is checked again; going back after accepting keeps the finished task done', () => {
+  const st = monWeek(); finishNext(st);
+  const beforeAccept = S.clone(st), o = st.offer;
+  S.addEvent(st, { title: 'Meeting', start: at(12, 12), end: at(12, 13, 30) }); S.replan(st, 'a meeting over the freed hour');
+  const r = S.acceptOffer(st);
+  ok(!r.ok || startOf(r.draft, named(r.draft, o.title)) !== o.to.start, 'the old suggestion is not applied over the meeting');
+  eq(fixedOn(st, at(12, 0)).filter(([t]) => t === 'Meeting').length, 1); eq(planProblems(st), []);
+  const ok2 = S.acceptOffer(beforeAccept); ok(ok2.ok);
+  const restored = beforeAccept;                                // what Undo puts back is the state before the yes
+  eq([restored.offer.status, named(restored, 'Algorithm Tracing Worksheet').status, startOf(restored, named(restored, o.title))], ['pending', 'done', o.from.start]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

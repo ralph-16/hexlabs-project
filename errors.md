@@ -11,7 +11,7 @@ Quoted text is the wording the app shows.
 
 §1–§9 describe messages and states the app is designed to show. §10 lists confirmed defects, where the app does something other than intended. §11 lists possible problems that still need testing. These three kinds are kept apart on purpose: a bug (§10), a missing feature or simulated part (§8, §9), and an intentional limit (§9).
 
-Last reviewed against the code on 14 Oct 2026, after automatic completion was removed, check-ins took its place, the risk percentage was replaced by statuses and reasons, the date, time and command defects were fixed, and Adjust schedule gained a recommended time. `node tests/run-tests.js` gave 108 passed, 0 failed. All sixteen confirmed defects (E1 to E16) are now fixed and marked so in §10; the original reports are kept for the record. The defects in §10 were reproduced by calling the app's own logic files (`js/parser.js`, `js/engine.js`, `js/store.js`, `js/assistant.js`) from a throwaway Node script, unless an entry says "read in the code". No browser session was run for this review, so on-screen results in §10 are taken from the code that draws them.
+Last reviewed against the code on 14 Oct 2026, after automatic completion was removed, check-ins took its place, the risk percentage was replaced by statuses and reasons, the date, time and command defects were fixed, Adjust schedule gained a recommended time, the recommendation and gap closing were improved, finishing early became a suggestion, and its regression (E22) was fixed. `node tests/run-tests.js` gave 130 passed, 0 failed. All twenty-two confirmed defects (E1 to E22) are now fixed (E21 regressed once and was fixed again as E22) and marked so in §10; the original reports are kept for the record. The defects in §10 were reproduced by calling the app's own logic files (`js/parser.js`, `js/engine.js`, `js/store.js`, `js/assistant.js`) from a throwaway Node script, unless an entry says "read in the code". No browser session was run for this review, so on-screen results in §10 are taken from the code that draws them.
 
 ## 1. Opening the app
 
@@ -159,14 +159,21 @@ These are worth knowing because the app does not announce them.
 - **The risk percentage is gone on purpose.** "At risk today", "Won't fit today" and "Not enough time" are statuses with reasons. The rule-based score behind "At risk today" is internal and is not a probability.
 - **"Won't fit today" can show equal numbers.** "About 1 hr of work is left and today has 1 hr of usable time" is followed by the reason: it is not enough once the 15-minute gaps are counted.
 - **"Change the deadline for X to next week" takes that Sunday.** Only a new task's "this week" / "next week" deadline asks which day.
+- **"Use the time you freed?" appears only for time that is genuinely free.** No card when the block had already ended, when the freed time is shorter than the next task, when the move would split a task, put a task at risk, or gain less than 30 minutes, or when the next task has a time you asked for or a day you chose.
+- **Every early finish is looked at on its own.** Accepting one suggestion does not approve anything later; the next early finish brings its own card. Only one card shows at a time: a new suggestion replaces a waiting one, and if the new finish frees nothing usable, the waiting one stays.
+- **A task planned for tomorrow can be suggested for today.** It stays tomorrow until you accept.
+- **A declined suggestion stays declined until the plan changes for another reason.** Reloading or time passing does not bring it back; editing any task does, if it still makes sense.
+- **A required repair can use freed time without asking.** If a change would otherwise leave a task without a slot, it is placed at once, even into time a suggestion was offered for; the suggestion then disappears.
 - **No reminders or notifications are delivered.** The app only updates while it is open. Profile → **Test notifications** shows a phone drawn inside the page; nothing reaches the device, and no permission is asked for.
 - **No home-screen widgets.** Profile → **Test widgets** shows previews inside the app.
 - **A planned block that ends is never marked done by itself.** SIKAD asks how it went. Until the student answers, that block's time is on hold and is not re-planned.
 - **A button on a Sample notification that needs a real task opens nothing.** It says so on the notification. **Review schedule** still opens the timeline, because it needs no task. Sample content never touches the real plan.
 - **The "Plan updated" notification is usually a sample.** It reads the Plan updated card's record, which clears itself about 12 seconds after a change.
 - **On a notification, "Adjust schedule" opens the Adjust schedule sheet and "Review task" opens Task details.**
-- **Adjusting one task can leave another at risk.** On a day with one short gap, whichever task takes that gap is tight. The sheet says so before you accept.
-- **A session that is still valid and in order is not pulled forward to close a gap.** Moving a task away can leave open time before the next one.
+- **A time you choose yourself can leave another task at risk.** The recommendation avoids this; a time you type may not. The sheet says so before you accept.
+- **A gap is closed only when it is worth it.** A session is not moved for less than 30 minutes' gain, is not split to fit a smaller gap, and a time you asked for is never moved.
+- **"Recommended: keep …" with Accept greyed out** means the current time is already the best one. Change the time needed or the deadline in Task details, or pick a time yourself.
+- **A start within the current quarter hour is refused** ("That is too close to now. The earliest start is …"), because the engine plans from the next quarter hour.
 - **Moving the Demo clock back withdraws check-ins** for blocks that are ahead again. It changes no task.
 
 ## 10. Confirmed defects
@@ -320,6 +327,40 @@ Each entry was reproduced on 14 Oct 2026 as described at the top of this file. T
 
 - **Fixed 14 Oct 2026.** The group was built from "no deadline, no slot, or past its deadline", so an overdue task could never leave it by being scheduled.
 - **Now:** the group is built from `taskStatus` (`js/store.js`): needs a deadline, does not fit, or waiting for a check-in answer. An overdue task with a slot is listed under Up next and keeps its Overdue mark.
+
+### E17. Adjust schedule recommended tomorrow for an overdue task that already held today's earliest opening (Fixed)
+
+- **Fixed 14 Oct 2026.** `recommendAdjustment` in `js/store.js`.
+- **Cause:** the rule only looked for a time *earlier* than the task's current one today. An overdue task already sits in today's first opening, so nothing earlier existed and the rule fell through to "the first later day". The task's "at risk" state was treated as a reason to move it, even though moving overdue work later can only delay it.
+- **Now:** for overdue work the earliest opening today always wins, including the one it already has ("Recommended: keep Today, …"). It goes to a later day only when today has no opening long enough, and the reason says how much open time today has. Tests: "overdue work is recommended into today's earliest opening" and "overdue work goes to a later day only when today truly has no opening".
+
+### E18. A recommendation could move the risk onto another task (Fixed)
+
+- **Fixed 14 Oct 2026.**
+- **Was:** the recommendation was judged by where the one task landed. Moving it could free a tight gap that another task then took, so the warning simply changed owner.
+- **Now:** each candidate is a whole plan from the engine, and the one with the fewest at-risk tasks in total wins; a tie means "stay put". The sheet still warns, before acceptance, when a time the student picks would put another task at risk. Tests: "an at-risk task gets a recommendation from whole-plan comparison" and "when every other time only moves the risk to another task, the recommendation is to stay put". Seen in the browser at the end of the demo route: the recommended time left no task at risk.
+
+### E19. Closing a check-in proposal with Escape threw an error (Fixed)
+
+- **Fixed 14 Oct 2026.** Found in the browser. The close handler assumed every proposal came from typed text. The plan was not changed by the error, but the next action could misbehave. `js/app.js` now checks first.
+
+### E20. Open time left by a change was not always closed up (Fixed)
+
+- **Fixed 14 Oct 2026.** A session that was still valid stayed where it was even when a change opened an earlier gap, unless a completely fresh plan was judged clearly better.
+- **Now:** after a change the student made, a session moves into an earlier gap when the gap is truly empty (no fixed commitment, buffer, or other task's session), the gain is an earlier day or at least 30 minutes, it finishes no later, and it is not split into more sittings. A requested start is never moved this way. Tests: "a flexible session moves into an earlier gap…", "compaction leaves sessions alone…", "after compaction every hard rule still holds…".
+
+### E21. Finishing early moved other tasks without asking (Fixed, then regressed: see E22)
+
+- **Fixed 14 Oct 2026.** `completeSession` replanned like any other change, so the gap-closing and "fresh plan is clearly better" rules pulled later work into the freed time, and could make a task at risk (seen on the demo route: ERD and Business Rules moved from Wednesday into tonight and showed At risk today).
+- **Now:** finishing early (Done, Focus Mode "Yes, it's complete", or Mark whole task done before its time) records the completion and leaves every other task where it is. If a task could use the freed time under the existing rules, Home shows one **Use the time you freed?** card. **Accept** applies that one move after checking it again; **Decline** keeps the plan and is remembered until the plan changes for another reason. Changes that keep the plan valid still happen at once. Found while checking: a routine clock tick could also swap in a tidier plan a minute later and move tasks into the freed time; routine recalculations now only repair. Tests: the seven "Finishing early" tests. Seen in the browser: Accept, Decline, reload, an unrelated edit bringing the card back, Undo, and a required repair using the freed time.
+
+### E22. After an accepted suggestion, later replans moved tasks without asking (regression of E21; Fixed)
+
+- **Found 14 Oct 2026**, reported in use and reproduced in the browser: three early finishes in a row through Focus Mode, each suggestion accepted; about a minute after the third, ERD and Business Rules moved from tomorrow into tonight by itself.
+- **Cause, verified:** accepting a suggestion can put a task that is due later (Use Case Diagram, due Thursday) ahead of one due sooner (ERD, due Wednesday). Every replan, including the "hold" replan after an early finish and the routine one on each clock tick, ran a rank-order rule that moves a task up when lower-ranked work sits ahead of it. Both sessions were still valid, so that move was an optional improvement, but it was made without asking. A second path: moving the Demo clock back rebuilt the whole plan from scratch, which also reshuffled tasks.
+- **Fix:** the rank-order rule now runs only after a change the student makes, never in a settled replan (an early finish, a clock tick, a reload) (`opts.settled` in `scheduleOnce`, `js/engine.js`). Moving the clock back keeps the plan and only repairs it (`setClock`, `js/store.js`). Each early finish is looked at on its own; a suggestion still waiting is kept (checked again) if the new finish frees nothing usable. Ask SIKAD "Mark … as done" now goes through the same flow (`finishTask`).
+- **Tests:** "A" to "I" under "Early finishes one after another" in `tests/run-tests.js`. The test "C and J" fails on the code before the fix and passes after it.
+- **Browser (headless Chromium, 14 Oct 2026):** three Focus Mode early finishes in a row each showed a new card and moved nothing else; after each Accept, +30 minutes and a reload changed nothing; a declined card stayed away and a separate finish got its own card; Ask SIKAD "Mark Big-O Worksheet as done" led to a card; Undo after Accept brought the card back with the finished task still done.
 
 ### Documentation that did not match the app (corrected in this review)
 

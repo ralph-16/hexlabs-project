@@ -26,6 +26,7 @@
       focusLog: [],     // { id, taskId, title, method, at, focusedMins, outcome } — one entry per session the student ended
       prefs: {},        // { focusMethod } — last working method the student chose
       daySnapshots: {}, // { 'YYYY-MM-DD': { blocks: [{ id, taskId, title, start, end, kind, movedAt? }] } } — what was planned for each day
+      offer: null,      // one optional suggestion after an early finish: { status: 'pending'|'declined', unitId, taskId, title, mins, from, to, gap, doneTitle, reason }
       autoDone: [],     // LEGACY, never added to now: blocks an earlier version marked done when their time passed. Kept so the student can still put one back.
       engineLog: [], seq: 1,
     };
@@ -49,6 +50,7 @@
     for (const t of st.tasks) { if (!Array.isArray(t.parts)) t.parts = []; if (!Array.isArray(t.dependencies)) t.dependencies = []; }
     st.checkins = st.checkins.filter((c) => c && typeof c.id === 'string' && typeof c.taskId === 'string' && isFinite(c.end));
     for (const c of st.checkins) if (!c.ck) c.ck = `${c.id}@${c.end}`;
+    if (!st.offer || typeof st.offer !== 'object' || !st.offer.gap || !st.offer.to || !st.offer.from) st.offer = null;
     if (st.active && !st.plan.some((x) => x && x.id === st.active.sessionId)) st.active = null;
     return st;
   }
@@ -147,7 +149,13 @@
       return c.partId ? !!part && !part.done && part.remainingMins > 0 : t.remainingMins > 0;
     });
     const prevPlan = state.plan.filter((s) => s.end > state.now);
-    const res = E.schedule(state, { prevPlan: opts.fresh ? null : prevPlan });
+    // A change the student made (it has a trigger) may also close gaps it opened; time simply passing never reshuffles.
+    // Time that an early finish freed, and that is still ahead, is offered to the student (state.offer).
+    // Until that is settled, nothing is moved into it as an optimisation. Required placements may still use it.
+    const openGap = state.offer && state.offer.gap && state.offer.gap.end > state.now ? state.offer.gap : null;
+    // A routine recalculation (no trigger: time passing, a reload) only repairs; it never swaps in a
+    // tidier plan by itself, so nothing moves without a reason the student can see.
+    const res = E.schedule(state, { prevPlan: opts.fresh ? null : prevPlan, compact: !!trigger, hold: !!opts.hold || !trigger, gap: opts.early ? opts.early.gap : openGap });
     const changes = opts.fresh ? [] : E.diff(prevPlan, res.plan, state, res.unscheduled);
     const oldPlan = state.plan;
     state.plan = res.plan;
@@ -171,6 +179,19 @@
         trigger, at: state.now, status: res.status, notes: opts.notes || [], silent: !!opts.silent,
         changes: changes.map((c) => ({ action: c.action, title: c.title, from: c.from ? { start: c.from.start, end: c.from.end } : null, to: c.to ? { start: c.to.start, end: c.to.end, mins: c.to.mins } : null })),
       };
+    }
+    // The early-finish suggestion. A task was just finished early: look for one. Any OTHER change the student
+    // makes is an independent reason to look again, which also ends an earlier "no". Time passing changes nothing.
+    if (!opts.noOffer) {
+      if (opts.early) {
+        // Each early finish is looked at on its own. One card at a time: the new suggestion replaces any
+        // earlier one; if the new finish frees nothing usable, a suggestion still waiting for an answer is
+        // checked again against the current plan and kept, so it is neither lost nor applied by itself.
+        const prior = state.offer && state.offer.status === 'pending' && state.offer.gap.end > state.now ? state.offer : null;
+        state.offer = earlyFinishOffer(state, opts.early.gap, opts.early.title, opts.early.taskId) ||
+          (prior ? earlyFinishOffer(state, prior.gap, prior.doneTitle, null) : null);
+      }
+      else if (trigger && state.offer) state.offer = openGap ? earlyFinishOffer(state, openGap, state.offer.doneTitle, null) : null;
     }
     return { res, changes, output };
   }
@@ -429,7 +450,7 @@
     return u ? u.mins : taskRemaining(task);
   }
   /** Fixed-free time on one day, from now on, as the engine sees it (buffers already taken off). */
-  const openOn = (state, day) => E.freeSlots(state, Math.max(T.ceilTo(state.now, 5), T.at(day, state.baseline.dayStart)), T.at(day, state.baseline.dayEnd));
+  const openOn = (state, day) => E.freeSlots(state, Math.max(T.ceilTo(state.now, 15), T.at(day, state.baseline.dayStart)), T.at(day, state.baseline.dayEnd));   // the engine plans from the next quarter hour
   /**
    * The valid start closest to `want` for `mins` of work that must end by `limit` (null = no limit).
    * Looks at every day from today to the limit, or three weeks. → ms | null
@@ -459,6 +480,7 @@
     if (start == null || !isFinite(start)) return no('NO_TIME', 'Pick a date and a time.');
     const end = start + mins * MIN, day = T.dayStart(start);
     if (start <= now) return no('PAST', 'That time has already passed.');
+    if (start < T.ceilTo(now, 15)) return no('TOO_SOON', `That is too close to now. The earliest start is ${T.time(T.ceilTo(now, 15))}.`);
     if (start < T.at(day, b.dayStart) || end > T.at(day, b.dayEnd)) return no('OUTSIDE_DAY', `That is outside your day (${T.hmLabel(b.dayStart)} to ${T.hmLabel(b.dayEnd)}) for ${T.dur(mins)} of work.`);
     if (limit != null && end > limit) return no('AFTER_DEADLINE', `Starting then, ${T.dur(mins)} of work would end after the deadline (${T.short(limit)} ${T.time(limit)}).`);
     if (!openOn(state, day).some((f) => f.start <= start && end <= f.end)) {
@@ -497,51 +519,75 @@
     return { ok: true, draft };
   }
   /**
-   * The time SIKAD recommends for a task that is at risk today or does not fit today, found by the
-   * placement engine on copies of the state (nothing here changes `state`):
-   *   1. earlier today, at today's first open time, if that makes it comfortable and costs no other task its deadline;
-   *   2. otherwise the first open time on a later day that is still before its deadline;
-   *   3. otherwise the earlier time today even if it stays tight; otherwise nothing better exists.
-   * → { taskId, title, mins, remainingMins, deadline, current: session|null, start: ms|null, basis, reason }
+   * The time SIKAD recommends for a task that is at risk today or does not fit today. Every candidate
+   * is a complete plan worked out by the engine on a copy (previewMove), and the candidates are compared
+   * as WHOLE plans, not just by where this one task lands (nothing here changes `state`):
+   *   candidates: where it is now · today's first open time · the first open time on each later day
+   *               that is still before its deadline.
+   *   1. A candidate that leaves more work without a slot than now is dropped.
+   *   2. Overdue work: the earliest candidate today wins, whatever else is true. Only when today has no
+   *      opening at all does it go to the earliest later one, and the reason says what is in the way.
+   *   3. Otherwise the plan with the fewest at-risk tasks IN TOTAL wins, so a move that only hands the risk
+   *      to another task is never recommended; on a tie, staying put beats moving, and earlier beats later.
+   * → { taskId, title, mins, remainingMins, deadline, current, start, basis: 'keep'|'earlier_today'|'later_day'|'none',
+   *     reason, newRisks: [titles of other tasks the recommended plan would put at risk] }
    */
   function recommendAdjustment(state, taskId) {
     const task = state.tasks.find((t) => t.id === taskId);
     if (!task || task.status === 'done' || task.status === 'cancelled') return null;
-    const now = state.now, today = T.dayStart(now), mins = firstUnitMins(state, task);
+    const now = state.now, today = T.dayStart(now), mins = firstUnitMins(state, task), b = state.baseline;
+    const overdue = task.deadline != null && task.deadline <= now;
     const limit = task.deadline != null && task.deadline > now && !task.lateOk ? task.deadline : null;
-    const current = state.plan.filter((s) => s.taskId === taskId && s.end > now).sort((a, b) => a.start - b.start)[0] || null;
-    const base = { taskId, title: task.title, mins, remainingMins: taskRemaining(task), deadline: task.deadline, current };
+    const current = state.plan.filter((s) => s.taskId === taskId && s.end > now).sort((a, c) => a.start - c.start)[0] || null;
+    const base = { taskId, title: task.title, mins, remainingMins: taskRemaining(task), deadline: task.deadline, current, newRisks: [] };
     const lost = (st) => (st.unscheduled || []).filter((u) => u.reason === 'no_time').length;
-    const fits = (f) => f.end - f.start >= mins * MIN && (limit == null || f.start + mins * MIN <= limit);
     const risks = (st) => E.completionConfidence(st, st.now).filter((r) => r.level === 'risk' || r.level === 'high');
-    const atRisk = (st) => risks(st).some((r) => r.taskId === taskId);
-    const othersAtRisk = (st) => risks(st).filter((r) => r.taskId !== taskId).length;
+    const fits = (f) => f.end - f.start >= mins * MIN && (limit == null || f.start + mins * MIN <= limit);
     const dl = limit != null ? ` and still before its deadline (${T.short(limit)} ${T.time(limit)})` : '';
-    // Already planned on a later day: that slot is the engine's own best answer.
-    if (current && T.dayStart(current.start) > today) {
-      return Object.assign(base, { start: current.start, basis: 'planned', reason: `It is already planned for ${T.rel(current.start, now)} at ${T.timeShort(current.start)}, the first open time for it${dl}.` });
-    }
-    const tryAt = (start) => { const p = start != null ? previewMove(state, taskId, start) : null; return p && p.ok && lost(p.draft) <= lost(state) ? p.draft : null; };
+    const wasRisk = new Set(risks(state).map((r) => r.taskId));
+    const mk = (start, draft, keep) => ({ start, draft, keep: !!keep, today: T.dayStart(start) === today, lost: lost(draft), risk: risks(draft).length,
+      newRisks: risks(draft).filter((r) => r.taskId !== taskId && !wasRisk.has(r.taskId)).map((r) => r.title) });
+    const tryAt = (start) => { const p = previewMove(state, taskId, start); return p.ok && lost(p.draft) <= lost(state) ? mk(start, p.draft) : null; };
+    const keep = current ? mk(current.start, state, true) : null;
+    const cands = [];
     const firstToday = (openOn(state, today).filter(fits)[0] || {}).start;
-    const earlier = firstToday != null && (!current || firstToday < current.start) ? firstToday : null;
-    const draftA = tryAt(earlier);
-    if (draftA && !atRisk(draftA)) {
-      return Object.assign(base, { start: earlier, basis: 'earlier_today', reason: `${T.timeShort(earlier)} is today's first open time. Starting then puts it ahead of the tasks planned before it, so it no longer depends on the end of the day.` });
+    if (firstToday != null && !(current && firstToday === current.start)) { const c = tryAt(firstToday); if (c) cands.push(c); }
+    for (let day = today + T.DAY, n = 0; n < 5 && day <= Math.min(limit != null ? T.dayStart(limit) : Infinity, today + 21 * T.DAY); day += T.DAY) {
+      const f = openOn(state, day).filter(fits)[0];
+      if (!f || (current && f.start === current.start)) continue;
+      const c = tryAt(f.start); if (c) { cands.push(c); n += 1; }
     }
-    // A later day: the first open time that fits. Sooner is better than tidier, above all for overdue work;
-    // if another task would then take today's freed time and become tight, the preview says so.
-    let later = null;
-    for (let day = today + T.DAY; day <= Math.min(limit != null ? T.dayStart(limit) : Infinity, today + 21 * T.DAY); day += T.DAY) {
-      const f = openOn(state, day).filter(fits)[0], d = f ? tryAt(f.start) : null;
-      if (!d) continue;
-      later = { start: f.start, clean: othersAtRisk(d) <= othersAtRisk(state) };
-      break;
+    const tight = (c) => (risks(c.draft).some((r) => r.taskId === taskId) ? ' It stays tight today: if the time needed is too high, lower it in Task details, or free up time.' : '');
+    const done = (c, basis, reason) => Object.assign(base, { start: c.start, basis, reason, newRisks: c.newRisks });
+
+    if (overdue) {   // 2. earliest feasible slot from now on; today before any later day
+      const todays = [keep].concat(cands).filter((c) => c && c.today).sort((a, c) => a.start - c.start);
+      if (todays.length) {
+        const c = todays[0];
+        return c.keep ? done(c, 'keep', `${T.timeShort(c.start)} is already today's earliest open time for it, and overdue work goes first. Moving it later would only delay it.${tight(c)}`)
+          : done(c, 'earlier_today', `It is overdue, so it goes into today's earliest open time, ${T.timeShort(c.start)}.${tight(c)}`);
+      }
+      const later = [keep].concat(cands).filter(Boolean).sort((a, c) => a.start - c.start)[0];
+      const openToday = Math.round(openOn(state, today).reduce((a, f) => a + (f.end - f.start) / MIN, 0));
+      const why = `Today has ${openToday >= 15 ? `only ${T.dur(openToday)} of open time left before ${T.hmLabel(b.dayEnd)}, and no single opening long enough` : `no open time left before ${T.hmLabel(b.dayEnd)}`} for ${T.dur(mins)} of work`;
+      if (later) return done(later, later.keep ? 'keep' : 'later_day', `${why}, so ${later.keep ? 'it stays at' : 'the earliest time is'} ${T.rel(later.start, now)} at ${T.timeShort(later.start)}.`);
+      return Object.assign(base, { start: null, basis: 'none', reason: `${why}, and no later opening was found in the next three weeks.` });
     }
-    if (later) {
-      return Object.assign(base, { start: later.start, basis: 'later_day', reason: `Today is too tight for ${T.dur(mins)} of work. ${T.rel(later.start, now)} at ${T.timeShort(later.start)} is the next open time${dl}.${later.clean ? '' : ' Another task would take the time this frees today; the list below shows it.'}` });
+
+    // 3. fewest at-risk tasks in the whole plan; then stay put; then earlier
+    const best = cands.slice().sort((a, c) => a.risk - c.risk || a.start - c.start)[0] || null;
+    if (keep && (!best || keep.risk <= best.risk)) {
+      const reason = !best ? `There is no other open time for it${limit != null ? ` before its deadline (${T.short(limit)} ${T.time(limit)})` : ''}.`
+        : `Its current time, ${T.rel(keep.start, now)} at ${T.timeShort(keep.start)}, is the best available: every other open time would leave as many tasks at risk, or more.`;
+      return done(keep, 'keep', `${reason}${tight(keep)}`);
     }
-    if (draftA) return Object.assign(base, { start: earlier, basis: 'earlier_today_tight', reason: `${T.timeShort(earlier)} is the earliest open time today. It is still tight, and no later day has room before its deadline.` });
-    return Object.assign(base, { start: null, basis: 'none', reason: `There is no better open time${limit != null ? ` before its deadline (${T.short(limit)} ${T.time(limit)})` : ''}. You can still choose a time below, or change the time needed or the deadline in Task details.` });
+    if (best) {
+      const helps = keep ? ` That leaves ${best.risk === 0 ? 'no task' : best.risk === 1 ? 'one task' : `${best.risk} tasks`} at risk today instead of ${keep.risk}.` : '';
+      return best.today
+        ? done(best, 'earlier_today', `${T.timeShort(best.start)} is today's first open time. Starting then puts it ahead of the tasks planned before it.${helps}`)
+        : done(best, 'later_day', `Today is too tight for ${T.dur(mins)} of work. ${T.rel(best.start, now)} at ${T.timeShort(best.start)} is the next open time${dl}.${helps}`);
+    }
+    return Object.assign(base, { start: null, basis: 'none', reason: `There is no open time for it${limit != null ? ` before its deadline (${T.short(limit)} ${T.time(limit)})` : ''}. You can still choose a time below, or change the time needed or the deadline in Task details.` });
   }
   /**
    * Where a task stands right now, worked out from the plan every time (never a stored flag):
@@ -557,6 +603,112 @@
     if ((state.checkins || []).some((c) => c.taskId === task.id)) return out('awaiting_answer', 'Waiting for your answer', true);
     if (task.status === 'in_progress') return out('in_progress', 'In progress', false);
     return out('scheduled', 'Scheduled', false);
+  }
+
+  // ------------------------------------- early finish: an offer, not a move --
+  // Finishing a block early frees time. Using it for another task is an OPTIONAL improvement, so SIKAD
+  // suggests it and waits: other tasks keep their slots until the student accepts (replan with `hold`).
+  // What is REQUIRED to keep the plan valid (work that would otherwise have no slot, the next task after an
+  // overrun, the rest of the same task) is still done at once and never waits on an unanswered offer.
+  //
+  // Which task is offered uses the rules that already exist, nothing new:
+  //   · order: E.rank (overdue, then deadline, then difficulty);
+  //   · worth it: the gap-closing thresholds (E.COMPACT_MIN or an earlier day, one sitting, ends no later);
+  //   · allowed: checkStart (day window, deadline, fixed commitments and their buffer) and the engine keeping it;
+  //   · safe: the whole plan it produces leaves no more work without a slot and no more tasks at risk,
+  //     and moves no other task.
+  /** Openings on `day` that are free of fixed commitments, buffers AND every planned session. */
+  function emptyOn(state, day, from) {
+    const buf = state.baseline.bufferMins * MIN;
+    let free = E.freeSlots(state, Math.max(from, T.at(day, state.baseline.dayStart)), T.at(day, state.baseline.dayEnd));
+    for (const p of state.plan.filter((x) => x.end > state.now)) {
+      free = free.flatMap((f) => (p.end + buf <= f.start || p.start - buf >= f.end) ? [f] : [{ start: f.start, end: p.start - buf }, { start: p.end + buf, end: f.end }].filter((x) => x.end - x.start >= 15 * MIN));
+    }
+    return free;
+  }
+  /** The plan that results from moving one unit to `start` and nothing else. → draft | null */
+  function offerDraft(state, u, task, start) {
+    const draft = clone(state), t = draft.tasks.find((x) => x.id === task.id);
+    draft.offer = null;
+    t.pinnedStart = start;
+    replan(draft, `Used freed time: ${u.title} → ${T.rel(start, state.now)} ${T.timeShort(start)}`, { silent: true, hold: true, noOffer: true });
+    t.pinnedStart = null;   // it was a suggestion the student took, not a time they fixed
+    return draft.plan.some((x) => x.unitId === u.id && x.start === start) ? draft : null;
+  }
+  /**
+   * The one suggestion for time freed by an early finish, or null. `gap` is the freed block { start, end }.
+   * Never changes `state`.
+   */
+  function earlyFinishOffer(state, gap, doneTitle, skipTaskId) {
+    const now = state.now, buf = state.baseline.bufferMins * MIN;
+    if (!gap || gap.end <= now || state.active) return null;
+    // Earliest permissible start: the next quarter hour, and a buffer after the moment the work actually ended.
+    const busy = state.busyUntil && state.busyUntil <= now && now - state.busyUntil < buf ? state.busyUntil : 0;
+    const from = Math.max(T.ceilTo(now, 15), busy ? T.ceilTo(busy + buf, 5) : 0);
+    const day = T.dayStart(gap.start);
+    const openings = emptyOn(state, day, from).filter((f) => f.start < gap.end && f.end > gap.start);
+    if (!openings.length) return null;
+    const lost = (st) => (st.unscheduled || []).filter((x) => x.reason === 'no_time').length;
+    const risk = (st) => E.completionConfidence(st, st.now).filter((r) => r.level === 'risk' || r.level === 'high').length;
+    const rest = (st, unitId) => JSON.stringify(st.plan.filter((x) => x.end > now && x.unitId !== unitId).map((x) => [x.unitId, x.start, x.end]).sort());
+    const held = new Set((state.checkins || []).map((c) => c.unitId));
+    for (const u of E.rank(E.units(state).filter((x) => x.deadline != null), now)) {
+      const task = state.tasks.find((t) => t.id === u.taskId);
+      if (!task || u.taskId === skipTaskId || task.pinnedStart || u.pinnedStart || held.has(u.id)) continue;
+      const prev = state.plan.filter((x) => x.unitId === u.id && x.end > now).sort((a, b) => a.start - b.start);
+      if (prev.length !== 1 || prev[0].mins !== u.mins) continue;                    // one sitting stays one sitting
+      const o = openings.find((f) => f.end - f.start >= u.mins * MIN);
+      if (!o) continue;                                                              // it does not fit the freed time
+      const start = o.start, end = start + u.mins * MIN;
+      if ((u.notBefore || 0) > start) continue;                                      // the student put it on a later day or snoozed it: that stands
+      if (!(T.dayStart(start) < T.dayStart(prev[0].start) || prev[0].start - start >= E.COMPACT_MIN * MIN) || end > prev[0].end) continue;   // not worth a move
+      if (!checkStart(state, { mins: u.mins, deadline: task.deadline, lateOk: task.lateOk }, start).ok) continue;
+      const draft = offerDraft(state, u, task, start);
+      if (!draft || rest(draft, u.id) !== rest(state, u.id) || lost(draft) > lost(state) || risk(draft) > risk(state)) continue;
+      const lateFix = task.lateOk && task.deadline > now && prev[0].end > task.deadline && end <= task.deadline;
+      const why = task.deadline <= now ? 'It is past its deadline, so it is first in line.'
+        : lateFix ? 'That would bring it back before its deadline.'
+        : `It is the next task by deadline (due ${T.rel(task.deadline, now).toLowerCase()}, ${T.timeShort(task.deadline)}) that fits there${u.difficulty === 'hard' ? ', and it is marked hard' : ''}.`;
+      return { status: 'pending', unitId: u.id, taskId: u.taskId, title: u.title, mins: u.mins, doneTitle: doneTitle || '',
+        from: { start: prev[0].start, end: prev[0].end }, to: { start, end }, gap: { start: gap.start, end: gap.end },
+        reason: `${doneTitle ? `You finished "${doneTitle}" early` : 'You finished early'}, so ${T.rel(start, now).toLowerCase()} ${T.range(start, end)} is open. ${why} No other task would move.` };
+    }
+    return null;
+  }
+  /**
+   * The student accepts the pending suggestion. It is worked out again against the plan as it is NOW.
+   *   still the same → { ok: true, draft }: the caller swaps the draft in (one step, like any proposal)
+   *   the plan has changed → { ok: false, offer }: the up-to-date suggestion (or null), stored as the pending one; nothing is applied
+   */
+  function acceptOffer(state) {
+    const o = state.offer;
+    if (!o || o.status !== 'pending') return { ok: false, offer: null };
+    const again = earlyFinishOffer(state, o.gap, o.doneTitle, null);
+    if (!again || again.unitId !== o.unitId || again.to.start !== o.to.start) { state.offer = again; return { ok: false, offer: again }; }
+    const u = E.units(state).find((x) => x.id === o.unitId), task = state.tasks.find((t) => t.id === o.taskId);
+    const draft = u && task ? offerDraft(state, u, task, o.to.start) : null;
+    if (!draft) { state.offer = null; return { ok: false, offer: null }; }
+    draft.lastUpdate.notes = [`You chose to use the time freed by finishing "${o.doneTitle}" early. No other task moved.`];
+    return { ok: true, draft };
+  }
+  /** "No": nothing moves, and the same suggestion is not made again until the plan changes for another reason. */
+  function declineOffer(state) {
+    if (state.offer && state.offer.status === 'pending') state.offer = Object.assign({}, state.offer, { status: 'declined' });
+  }
+  /**
+   * Mark a whole task done (Task details). If that is before its planned time, the freed time is offered
+   * in the same way as after Done on a block; other tasks are not moved.
+   */
+  function finishTask(state, taskId) {
+    const task = state.tasks.find((t) => t.id === taskId);
+    if (!task) return null;
+    const mine = state.plan.filter((x) => x.taskId === taskId && x.end > state.now).sort((a, b) => a.start - b.start);
+    completeTask(state, taskId);
+    state.checkins = (state.checkins || []).filter((c) => c.taskId !== taskId);
+    if (state.active && mine.some((x) => x.id === state.active.sessionId)) state.active = null;
+    const first = mine[0];
+    const early = first ? { gap: { start: Math.max(state.now, first.start), end: first.end }, title: task.title, taskId } : null;
+    return replan(state, `Completed: ${task.title}`, { silent: true, hold: !!early, early });
   }
 
   // ------------------------------------------------ too much work: adjust --
@@ -736,7 +888,10 @@
     if (state.active && state.active.sessionId === id) state.active = null;
     const notes = [];
     if (task && task.status === 'done') notes.push(`"${task.title}" is complete.`);
-    return replan(state, `Marked done: ${s.title}`, { notes, silent: true });
+    // Finished before the block's planned end: the time that frees is OFFERED (state.offer), and other tasks
+    // stay where they are. The freed block runs from now (or its planned start, if that is still ahead) to its planned end.
+    const freed = now < s.end ? { gap: { start: Math.max(now, s.start), end: s.end }, title: s.title, taskId: s.taskId } : null;
+    return replan(state, `Marked done: ${s.title}`, { notes, silent: true, hold: !!freed, early: freed });
   }
 
   /** One-tap "Snooze / Didn't finish": push this piece of work to the next open block. */
@@ -897,13 +1052,17 @@
     state.now = newNow;
     if (back) {
       state.checkins = (state.checkins || []).filter((c) => c.end <= newNow);
-      return Object.assign(replan(state, null, { fresh: true }), { missed: [] });
+      state.offer = null;   // worked out for a moment that is no longer "now"
+      // Moving the clock back is not a reason to reshuffle: the plan is kept and only repaired (work that was on hold is placed again).
+      return Object.assign(replan(state, null), { missed: [] });
     }
     if (state.active) {
       const a = state.plan.find((s) => s.id === state.active.sessionId);
       if (!a || a.end <= newNow) state.active = null;
     }
     const missed = noteMissed(state);
+    if (state.offer && (!state.offer.gap || state.offer.gap.end <= newNow)) state.offer = null;
+    else if (state.offer && state.offer.status === 'pending' && state.offer.to.start < T.ceilTo(newNow, 15)) state.offer = earlyFinishOffer(state, state.offer.gap, state.offer.doneTitle, null);
     const ahead = () => JSON.stringify(state.plan.filter((s) => s.end > newNow).map((s) => [s.unitId, s.start]));
     const before = ahead();
     const r = replan(state, null);
@@ -983,7 +1142,7 @@
   root.TempoStore = {
     KEY, clone, initialState, load, save, reset, uid, log, taskRemaining, taskTotal, makeTask, setDuration,
     replan, findSession, startSession, pauseSession, resumeSession, skipSession, focusElapsedMs, endFocus,
-    checkStart, nearestStart, previewMove, recommendAdjustment, taskStatus,
+    checkStart, nearestStart, previewMove, recommendAdjustment, taskStatus, earlyFinishOffer, acceptOffer, declineOffer, finishTask,
     completeSession, snoozeSession, dismissCheckin, setClock, noteMissed, checkinDone, checkinPartial, checkinNotDone, undoAutoDone, ackAutoDone,
     extendTask, completePart, completeTask, setTaskRemaining, KEY, applyTaskAction, applyIntent, previewIntents, suggestAdjustment, storageAvailable, DIFFICULTIES, weeklyProgress, sanitize, daySummary,
     addEvent, addRecurring, cancelOccurrence, classesFromPhase1, applyLifestyle, parseContext, loadDemo,

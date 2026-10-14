@@ -18,7 +18,7 @@ This is the one reference for how SIKAD works and where everything is in the cod
 | Type | Installable PWA, single page |
 | Stack | Plain HTML, CSS and JavaScript. No framework, no libraries, no build step, no `package.json` |
 | Run | Open `index.html`, or `python3 -m http.server` and visit `http://localhost:8000` |
-| Tests | `node tests/run-tests.js` (108 logic tests, no dependencies) |
+| Tests | `node tests/run-tests.js` (130 logic tests, no dependencies) |
 | Storage | One state object in `localStorage` under `tempo-state-v1`; theme choice under `sikad-theme`; widget preview sizes under `sikad-widget-sizes`; the Demo clock's shift in session storage (`sikad-clock-shift`, one tab) |
 | Network | None. No backend, no API calls, no AI model. All "AI" behaviour is deterministic JavaScript rules |
 | Modules | Classic `<script>` tags. Each file is an IIFE that attaches one global (`window.Tempo*`) |
@@ -45,7 +45,7 @@ hexlabs-project/
 │   ├── focus.js                  Focus Mode methods and timer       → TempoFocus
 │   ├── assistant.js              Ask SIKAD question answering       → TempoAssistant
 │   ├── motion.js                 FLIP animation layer               → TempoMotion
-│   └── app.js                    UI layer: render + actions (3,712 lines)
+│   └── app.js                    UI layer: render + actions (3,757 lines)
 ├── fonts/                        Self-hosted variable fonts + licences
 ├── icons/                        SVG logo mark and wordmark
 ├── tests/
@@ -113,11 +113,11 @@ PWA manifest: name, `standalone` display, portrait orientation, Paper background
 | `motion-spec.md` | 205 | Motion tokens, technology, each interaction, overlap rules, reduced motion, acceptance criteria |
 | `SIKAD-UIUX-AUDIT-REPORT_v3.md` | 191 | The audit: verdict, journey table, findings (IDs such as `F02`, `R07`, `S03`), rubric mapping, backlog |
 | `build-prompts_v3.md` | 259 | The prompt pack that turns audit findings into batches (Patch 1 through Batch 12, final regression) |
-| `process-log.md` | 155 | Running log, one entry per batch: what changed, which finding it addresses, one test and its result |
-| `user_flow.md` | 856 | Demonstration guide for presenters: a fixed starting state (Demo clock on next Monday 9:05 AM, Alex's week), a 12-stop main route with the expected result of every step, nine optional scenarios, recovery, and what was verified (untracked in git as of this writing) |
-| `errors.md` | 354 | Every error and problem state by area, plus confirmed defects and things that still need testing |
+| `process-log.md` | 170 | Running log, one entry per batch: what changed, which finding it addresses, one test and its result |
+| `user_flow.md` | 879 | Demonstration guide for presenters: a fixed starting state (Demo clock on next Monday 9:05 AM, Alex's week), a 12-stop main route with the expected result of every step, nine optional scenarios, recovery, and what was verified (untracked in git as of this writing) |
+| `errors.md` | 395 | Every error and problem state by area, plus confirmed defects and things that still need testing |
 
-| `test-guide.md` | 293 | Five manual tests for the user/developer, with a test log and a correction log. All start as NOT RUN |
+| `test-guide.md` | 326 | Five manual tests for the user/developer, with a test log and a correction log. All start as NOT RUN |
 | `system_codebase_summary.md` | — | This file. It replaces the earlier `system_summary.md` and `codebase_summary.md` |
 
 How they relate: `design.md` and `motion-spec.md` say what the app should be → the audit report says where it falls short → `build-prompts_v3.md` turns findings into batches → `process-log.md` records what was done.
@@ -293,7 +293,7 @@ Placing, in this order:
 3. **Overdue unfinished work takes the earliest real slot**, before anything from the previous plan is kept. It keeps its real deadline and is labelled overdue.
 4. Every other task is handled once, in rank order. It keeps its sessions from the previous plan when they are still valid, unless that would leave it behind lower-ranked work it can go ahead of. Otherwise it takes the earliest open slot before its deadline.
 
-A task that loses its slot in steps 3 or 4 is placed again in its own turn: later the same day if it fits, otherwise on the next day with room before its deadline. Because every task is re-evaluated in rank order, one change carries across as many days as it needs to within the three-week window; displaced work is not all pushed to tomorrow. Sessions that are still valid and in order do not move. On every replan the engine also builds a plan from scratch and uses it instead of the stable one only when it fits more work or finishes important work clearly earlier.
+A task that loses its slot in steps 3 or 4 is placed again in its own turn: later the same day if it fits, otherwise on the next day with room before its deadline. Because every task is re-evaluated in rank order, one change carries across as many days as it needs to within the three-week window; displaced work is not all pushed to tomorrow. Sessions that are still valid and in order do not move. After a change the student makes, the engine also builds a plan from scratch and uses it instead of the stable one when it fits more work or finishes important work clearly earlier. A routine recalculation (time passing, a reload) and the replan after an early finish use it only when it fits more work: they repair, they do not reshuffle.
 
 **Deadline rescue.** If that leaves out work that could still meet its deadline, the engine tries plain earliest-deadline order with already-overdue work last, and uses it only when it fits strictly more.
 
@@ -319,16 +319,34 @@ No screen moves a schedule entry by itself. Changes that need approval are shown
 
 The sheet shows the task, the time it still needs, when it is planned now, its deadline, and a **recommended** date and time with the reason. The date and time fields are pre-filled with the recommendation. Under them is the plan that would result: every task that moves, before → after, and any warning that would remain.
 
-The recommendation comes from the placement engine, on copies of the state (`recommendAdjustment()` in `js/store.js`):
+The recommendation comes from the placement engine, on copies of the state (`recommendAdjustment()` in `js/store.js`). Every candidate is a **whole plan**, and the plans are compared, not just the one task's slot:
 
-1. If the task is already planned on a later day, that slot is the engine's own best answer and is the recommendation.
-2. Otherwise, today's first open time, if it is earlier than the current slot, makes the task comfortable, and costs no other task its deadline.
-3. Otherwise, the first open time on a later day that is still before its deadline. If another task would then take the time freed today and become tight, the sheet says so.
-4. Otherwise the earlier time today even though it stays tight; or, if nothing fits, "No better time found" with the way out (change the time needed or the deadline).
+- **Candidates:** where the task is now; today's first open time; the first open time on each later day that is still before its deadline.
+- A candidate that leaves more work without a slot than now is dropped.
+- **Overdue work:** the earliest opening today wins, whatever else is true, including the one it already holds ("Recommended: keep Today, 12:15 PM"). It goes to a later day only when today has no opening long enough, and the reason says how much open time today has left.
+- **Other work:** the plan with the fewest at-risk tasks in total wins, so a move that only hands the risk to another task is not recommended. On a tie, staying put beats moving, and earlier beats later.
+- If nothing fits, "No better time found" with the way out (change the time needed or the deadline).
 
 The student can keep the recommendation or type another date and time. Each change is checked (`checkStart()`) and, if allowed, worked out again in full (`previewMove()`): the chosen start is honoured, flexible tasks in the way are placed again by the ordinary engine, on later days if need be, and the before → after list is refreshed. A time that cannot be used says exactly why (past; outside the day; ends after the deadline; runs into a named class, shift or commute) and offers the **closest time that works** as a button; **Accept changes** stays disabled until the time is valid. **Use recommended time** returns to the recommendation. **Keep current plan** closes the sheet with nothing changed. **Accept changes** swaps in the worked-out plan in one step, with Undo.
 
 The same `checkStart()` guards the **Start at** field in Task details and in Add a task, so the three places cannot disagree. Add a task now has **Start at (optional)** too.
+
+**Closing gaps (compaction).** After a change the student made, a session that is still valid moves into an earlier gap only when all of these hold: the gap is truly empty (free of fixed commitments, buffers and every session other tasks still hold), so nothing is displaced; the gain is an earlier day or at least 30 minutes; it finishes no later; and it is not split into more sittings. A requested start is never moved this way, and steps and dependencies stay in order. It runs inside the same rank-ordered pass (`scheduleOnce` in `js/engine.js`, `COMPACT_MIN`), so work due sooner closes up first. It does not run when a replan has no change behind it, nor into time freed by an early finish (§8.4).
+
+### 8.4 Finishing early: a suggestion, not a move
+
+Finishing a block before its planned end frees time. Using that time for another task is an **optional improvement**, so SIKAD asks; keeping the plan valid is a **required repair**, so SIKAD still does it at once.
+
+- **Recording.** Done, Focus Mode "Yes, it's complete", Mark whole task done, and Ask SIKAD "Mark … as done" after its proposal is accepted (`completeSession`, `finishTask` in `js/store.js`) record the completion exactly as before. If it was before the block's planned end, the freed block runs from now (or its planned start, if that is still ahead) to its planned end. The replan then runs with `hold`: other tasks keep their slots, and only a from-scratch plan that fits *more* work may override that.
+- **Finding a suggestion** (`earlyFinishOffer`). Existing rules only: openings in the freed block that are free of fixed commitments, buffers and every planned session, starting no earlier than the next quarter hour and 15 minutes after the actual finish; tasks in `rank` order; skip a task with a requested start, a chosen later day, an open check-in, or more than one sitting; it must fit whole, gain an earlier day or at least `COMPACT_MIN` (30 minutes), end no later, pass `checkStart`, be kept by the engine, move no other task, and leave no more unscheduled work and no more at-risk tasks. The first that passes is the one suggestion; otherwise none.
+- **State.** `state.offer`: one object or null — `{ status: 'pending'|'declined', unitId, taskId, title, mins, from, to, gap, doneTitle, reason }`. Saved with the plan, so a reload shows the same card.
+- **Home card.** "Use the time you freed?" in the flow of Home (`offerCard` in `js/app.js`), with the task, the suggested and current times, the reason, **Accept** and **Decline**. Hidden during a focus session.
+- **Accept** (`acceptOffer`). Worked out again against the plan as it is now. Still the same: the resulting plan replaces the state in one step, moving only that task, without pinning it, completing it or crediting it; Undo restores the plan before it and the card. Changed: nothing is applied and the up-to-date suggestion (or none) takes its place.
+- **Decline** (`declineOffer`). Nothing moves. The suggestion is kept as `declined`, so reloads, rerenders and clock ticks do not bring it back, and the engine is told to leave the freed block alone (`gap`): gap-closing does not move anything into it and the fresh-plan swap is off.
+- **Every finish asks again.** Each early finish is evaluated on its own; accepting one suggestion authorises that one move only. One card at a time: a new suggestion replaces a waiting one; if the new finish frees nothing usable, the waiting one is checked again and kept. A task planned for tomorrow may be suggested for today and stays tomorrow until accepted.
+- **Settled replans.** After an early finish, on a clock tick or a reload, the engine runs `settled`: no gap closing, no fresh-plan swap, and no rank-order pull-forward (moving a task up because lower-ranked work sits ahead of it). Those are optional improvements and happen only after a change the student makes. Moving the Demo clock back keeps the plan and only repairs it.
+- **Nothing else moves quietly.** A routine recalculation (a clock tick, a reload) never swaps in a tidier plan; it only repairs. So the time a suggestion leaves behind, or that a declined one keeps, is not filled by itself a minute later.
+- **Looking again.** Any other change the student makes (a trigger on `replan`) re-evaluates the freed block: a pending suggestion is recalculated, a declined one is cleared and may be offered again. When the freed block's end passes, the suggestion is dropped. A required placement (for example a task displaced by a new commitment) may use the freed time at any moment; the suggestion then disappears.
 
 ### 8.3 Where a task stands is derived, never stored
 
@@ -445,7 +463,7 @@ From `initialState()` in `js/store.js`:
 | Baseline | `baseline` — `dayStart`, `dayEnd`, `commuteMins`, `bufferMins`, `routineMins`, `protectLunch`, `classes[]`, `recurring[]` |
 | Inputs | `tasks[]`, `events[]`, `cancellations[]` |
 | Plan | `plan[]`, `unscheduled[]`, `needsDeadline[]`, `alerts[]`, `status` |
-| Session | `active`, `checkins[]` (blocks that ended without a report; their minutes are on hold until answered), `lastUpdate` |
+| Session | `active`, `checkins[]` (blocks that ended without a report; their minutes are on hold until answered), `offer` (the one early-finish suggestion, pending or declined, or null), `lastUpdate` |
 | History | `history[]`, `workLog[]`, `focusLog[]`, `daySnapshots{}`, `engineLog[]`, `autoDone[]` (legacy: records left by an earlier version; nothing adds to it now) |
 
 ### 12.2 How state changes
@@ -500,12 +518,12 @@ typed or spoken text
 | `time.js` | 123 | `TempoTime` | — |
 | `data.js` | 121 | `TempoData` | Time |
 | `parser.js` | 903 | `TempoParser` | Time |
-| `engine.js` | 769 | `TempoEngine` | Time |
-| `store.js` | 991 | `TempoStore` | Time, Engine, Parser, Data |
+| `engine.js` | 792 | `TempoEngine` | Time |
+| `store.js` | 1,150 | `TempoStore` | Time, Engine, Parser, Data |
 | `focus.js` | 97 | `TempoFocus` | Time |
 | `assistant.js` | 240 | `TempoAssistant` | Time, Engine, Parser (Store at call time) |
 | `motion.js` | 133 | `TempoMotion` | — (DOM only) |
-| `app.js` | 3,712 | — | all of the above |
+| `app.js` | 3,757 | — | all of the above |
 
 #### `js/time.js`
 Wall-clock time helpers. Times are stored as "wall-clock milliseconds": a UTC timestamp whose UTC fields equal the student's local time. `T.now()` reads the device clock and timezone. Exposes the `MIN`, `HOUR`, `DAY` constants plus date construction and formatting helpers used everywhere else. `T.now()` is the real minute plus the presenter's Demo-clock shift (`T.shift`, zero unless set in the judge dock; `T.real()` is the device clock alone). Form helpers `dateInput`, `timeInput`, `joinInput`, `splitDur` and `joinDur` turn date, time, hours and minutes fields into wall-clock values without passing through the device timezone.
@@ -559,7 +577,7 @@ Exports, grouped:
 - Sessions: `findSession`, `startSession`, `pauseSession`, `resumeSession`, `skipSession`, `completeSession`, `snoozeSession`, `focusElapsedMs`, `endFocus`, `dismissCheckin`
 - Baseline: `addEvent`, `addRecurring`, `cancelOccurrence`, `classesFromPhase1`, `applyLifestyle`
 - Reporting: `weeklyProgress`, `daySummary`
-- Adjusting one task: `checkStart`, `nearestStart`, `previewMove`, `recommendAdjustment`; status: `taskStatus`
+- Adjusting one task: `checkStart`, `nearestStart`, `previewMove`, `recommendAdjustment`; status: `taskStatus`; finishing early: `earlyFinishOffer`, `acceptOffer`, `declineOffer`, `finishTask`
 - Clock and check-ins: `setClock`, `noteMissed`, `checkinDone`, `checkinPartial`, `checkinNotDone`, `dismissCheckin`
 - Legacy: `undoAutoDone`, `ackAutoDone`
 - Other: `DIFFICULTIES`, `KEY`
@@ -641,16 +659,16 @@ The only stylesheet. Mobile first.
 node tests/run-tests.js
 ```
 
-#### `tests/run-tests.js` (89 KB, 1,210 lines)
-Dependency-free Node script. It `require`s the seven logic modules (everything except `motion.js` and `app.js`), pins `T.now` to Sunday 11 October 2026, 9:30 PM so results repeat, and runs 108 tests with a tiny built-in `test`/`ok`/`eq` harness.
+#### `tests/run-tests.js` (113 KB, 1,503 lines)
+Dependency-free Node script. It `require`s the seven logic modules (everything except `motion.js` and `app.js`), pins `T.now` to Sunday 11 October 2026, 9:30 PM so results repeat, and runs 130 tests with a tiny built-in `test`/`ok`/`eq` harness.
 
-Covers: capture and clarification, Ask SIKAD answers, replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, working-method suggestions, focus-session outcomes, weekly progress, completion confidence, save/load, overdue placement and multi-day replanning, snoozing a pinned task, the Adjust schedule recommendation, a chosen time and its reflow, refused times and their alternatives, task status derived from the plan, check-ins for blocks that ended (no automatic completion, one question per block, Completed / Partly done / Not finished, the clock moving back), adjustments that reach later days and ones that cannot fit, legacy automatic-completion records, and the date, time and duration helpers.
+Covers: capture and clarification, Ask SIKAD answers, replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, working-method suggestions, focus-session outcomes, weekly progress, completion confidence, save/load, overdue placement and multi-day replanning, snoozing a pinned task, consecutive early finishes each asking again and moving nothing by themselves, every completion path, tomorrow-to-today suggestions, the early-finish suggestion (one at a time, no automatic move, buffer after the real finish, Accept rechecked, Decline remembered, re-evaluation after another change, required repairs not blocked), the Adjust schedule recommendation compared across whole plans, overdue work kept at today's earliest opening, gap compaction and when it must not happen, the 15-minute gap before a 10 PM commitment, a chosen time and its reflow, refused times and their alternatives, task status derived from the plan, check-ins for blocks that ended (no automatic completion, one question per block, Completed / Partly done / Not finished, the clock moving back), adjustments that reach later days and ones that cannot fit, legacy automatic-completion records, and the date, time and duration helpers.
 
 Not covered: rendering, voice capture, motion, and anything else that needs a browser.
 
-Current result: **108 passed, 0 failed** (14 Oct 2026).
+Current result: **130 passed, 0 failed** (14 Oct 2026).
 
-**Browser checks.** Screens and motion are not covered by the logic suite. On 14 Oct 2026 a headless Chromium run (driving the real screens with the Demo clock fixed) covered: the task edit form; the check-in card, its three answers, the proposal, Accept, Keep current plan and Undo; the clock moving forward, +15 minutes, a reload, and back; the widget page; and the simulated phone with every notification and every button, at 320, 390 and 1280 px in light and dark. The main route in `user_flow.md` was replayed from the written guide. Not checked: a real phone, iOS Safari, voice input, a screen reader, an installed app, offline use.
+**Browser checks.** Screens and motion are not covered by the logic suite. On 14 Oct 2026 a headless Chromium run (driving the real screens with the Demo clock fixed) covered: the task edit form; the check-in card, its three answers, the proposal, Accept, Keep current plan and Undo; the clock moving forward, +15 minutes, a reload, and back; the widget page; and the simulated phone with every notification and every button, at 320, 390 and 1280 px in light and dark. The main route in `user_flow.md` was replayed from the written guide. Not checked, and still marked untested in `test-guide.md` §4a: iOS Safari, a real phone, a screen reader, an installed PWA, offline use, System theme. Voice input was not checked either.
 
 **Covered since 14 Oct 2026:** overnight times, dates that have passed, vague weeks, impossible dates, and two tasks in one command (`errors.md` §10, E2–E4, E7, E11), each with its own test.
 
@@ -662,7 +680,7 @@ Current result: **108 passed, 0 failed** (14 Oct 2026).
 |---|---|---|
 | Setup, typed brain dump, review, first plan | Implemented | |
 | Ordering, placing, buffer, splitting, replanning | Implemented | Covered by the logic tests. |
-| Done, Snooze, Undo | Implemented | Undo is one level. |
+| Done, Snooze, Undo | Implemented | Undo is one level. Finishing early moves no other task; the freed time is suggested (§8.4). |
 | Check-ins for blocks that ended | Implemented | Nothing is completed by the clock; the student answers, and unfinished work is re-planned as a proposal (§9). |
 | Widget previews, notification phone simulator | Simulated, in-app only | Profile → Test widgets / Test notifications (§11). |
 | Too much work: "A plan that fits" | Implemented | Any deadline edit ends an earlier late agreement. |
@@ -697,7 +715,7 @@ Time is the device's real date and time, unless a presenter shifts the Demo cloc
 - Widgets and notifications exist as in-app previews only. The phone on the notification page is drawn in the page; nothing reaches the device.
 - Confirmed defects and items that still need testing are listed in `errors.md` §10 and §11.
 
-Confirmed defects: none open. E1 to E11 in `errors.md` §10 are all fixed; the last five (E2, E3, E4, E7, E11) needed changes in `js/parser.js` and one in `js/engine.js`, which were authorized on 14 Oct 2026. Known limits that remain: the 90-minute midday gap on a busy day flags any one-hour task as at risk, so an adjustment can move the warning to the task that takes that gap (the sheet says so before you accept); a weekly commitment past midnight has to be entered as two; "change the deadline for X to next week" still takes that Sunday; numeric dates are read month first.
+Confirmed defects: none open. E1 to E11 in `errors.md` §10 are all fixed; the last five (E2, E3, E4, E7, E11) needed changes in `js/parser.js` and one in `js/engine.js`, which were authorized on 14 Oct 2026. Known limits that remain: a time the student types in Adjust schedule can still leave another task at risk (the sheet warns before acceptance; the recommendation itself avoids it); a start inside the current quarter hour is refused; a weekly commitment past midnight has to be entered as two; "change the deadline for X to next week" still takes that Sunday; numeric dates are read month first.
 
 Remaining work: replace the provisional widget and notification content (`WIDGETS`, `NOTIFS`); check the items in `errors.md` §11; test on real phones.
 
@@ -721,6 +739,7 @@ Places where other documents and the code disagree:
 | Sample data | `js/data.js` |
 | Widget or notification wording | `WIDGETS` and `NOTIFS` in `js/app.js` (lines 1730 and 1853) |
 | What happens when time passes | `setClock` and `noteMissed` in `js/store.js`; `syncClock` in `js/app.js` (clock section) |
+| The early-finish suggestion | `earlyFinishOffer`, `acceptOffer`, `declineOffer` in `js/store.js`; `offerCard`, `offerAccept`, `offerDecline` in `js/app.js`; `hold` and `gap` in `schedule()` in `js/engine.js` |
 | The Adjust schedule sheet | `openAdjust`, `adjustSheet`, `acceptAdjust` in `js/app.js`; `recommendAdjustment`, `previewMove`, `checkStart` in `js/store.js` |
 | Which group a task is in on the Tasks tab | `taskStatus` in `js/store.js` |
 | The check-in card and its proposal | `checkinCards`, `checkinProposal` in `js/app.js`; `checkinDone` / `checkinPartial` / `checkinNotDone` in `js/store.js` |
