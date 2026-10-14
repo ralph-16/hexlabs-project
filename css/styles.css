@@ -244,7 +244,7 @@ label > input, label > select, label > textarea, label > .hrs-input { margin-top
   cursor: pointer; font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 6px;
 }
 .chip-btn:hover { background: var(--surface-2); }
-.chip-btn.on, .chip-btn[aria-checked="true"] { background: var(--harbor); color: var(--bg); border-color: var(--harbor); }
+.chip-btn.on, .chip-btn[aria-checked="true"] { background: var(--forest); color: var(--bg); border-color: var(--forest); }
 .chip-btn svg { width: 16px; height: 16px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
 .row.end { justify-content: flex-end; }
