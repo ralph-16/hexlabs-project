@@ -78,6 +78,10 @@ test('every demo scenario is understood as the kind of input it is', () => {
 });
 
 console.log('\nAsk SIKAD answers use the current plan');
+test('4. every "Try asking" example shown in Ask SIKAD gets a real answer, not a "did not understand"', () => {
+  const st = demo();
+  for (const q of D.QUESTIONS) { const a = A.answer(st, q); ok(a && a.title && !a.missing && !a.unknown, q); }
+});
 test('4. "what next" names the same session as the Focus Card', () => {
   const st = demo(); eq(A.answer(st, 'What should I work on next?').title, E.nextSession(st.plan, st.now).title);
 });

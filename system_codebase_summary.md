@@ -18,7 +18,7 @@ This is the one reference for how SIKAD works and where everything is in the cod
 | Type | Installable PWA, single page |
 | Stack | Plain HTML, CSS and JavaScript. No framework, no libraries, no build step, no `package.json` |
 | Run | Open `index.html`, or `python3 -m http.server` and visit `http://localhost:8000` |
-| Tests | `node tests/run-tests.js` (130 logic tests, no dependencies) |
+| Tests | `node tests/run-tests.js` (131 logic tests, no dependencies) |
 | Storage | One state object in `localStorage` under `tempo-state-v1`; theme choice under `sikad-theme`; widget preview sizes under `sikad-widget-sizes`; the Demo clock's shift in session storage (`sikad-clock-shift`, one tab) |
 | Network | None. No backend, no API calls, no AI model. All "AI" behaviour is deterministic JavaScript rules |
 | Modules | Classic `<script>` tags. Each file is an IIFE that attaches one global (`window.Tempo*`) |
@@ -109,7 +109,7 @@ PWA manifest: name, `standalone` display, portrait orientation, Paper background
 |---|---:|---|
 | `README.md` | 137 | Overview, 4-minute demo script, spec-to-code map, what is simulated, known limitations |
 | `CLAUDE.md` | 20 | Build rules: stack limits, protected files, product-vs-prototype rules, how to work and report |
-| `design.md` | 421 | Source of truth for design: brand, principles, "Grounded Path" direction, typography, colour, components, status states, motion, screen specs, copy |
+| `design.md` | 425 | Source of truth for design: brand, principles, "Grounded Path" direction, typography, colour, components, status states, motion, screen specs, copy |
 | `motion-spec.md` | 205 | Motion tokens, technology, each interaction, overlap rules, reduced motion, acceptance criteria |
 | `SIKAD-UIUX-AUDIT-REPORT_v3.md` | 191 | The audit: verdict, journey table, findings (IDs such as `F02`, `R07`, `S03`), rubric mapping, backlog |
 | `build-prompts_v3.md` | 259 | The prompt pack that turns audit findings into batches (Patch 1 through Batch 12, final regression) |
@@ -189,11 +189,11 @@ The app has four tabs and a centre **Ask SIKAD** button.
 **Home** — the daily screen, read top to bottom:
 
 1. **What to do next.** One task, when to do it, and a "Why this?" explanation. Three buttons: **Start task**, **Done**, **Snooze**.
-2. **Today.** Task time still left today, tasks completed out of today's total, and **View schedule →**, which jumps to today's timeline.
-3. **Weekly task progress.** Percent of planned task time completed, completed versus planned time, whether the remaining work **Fits**, and **View weekly overview →**.
+2. **Today.** Task time still left ("3 hrs of tasks left"), tasks completed out of today's total, and **View schedule →**, which jumps to today's timeline. Risk rows show one line each ("You may not finish this today.", "Planned tomorrow, 6:15 PM instead.") with the numbers under **Why?**.
+3. **Weekly task progress.** Percent of planned task time completed, completed versus planned time, focus sessions (only once there is one), whether the remaining work **Fits**, and **View weekly overview →**.
 4. **Timeline.** Today or tomorrow as a path of classes and other fixed commitments (with a lock), commutes, the morning routine, an optional lunch hour, tasks, completed and missed blocks, and open time of 45 minutes or more.
 
-When something needs attention, a card appears near the top: **Plan updated** (what moved, before → after), **Not enough time**, a missing deadline ("When is … due?"), or a **check-in** ("Your scheduled time for … has ended. How did it go?") for a block that ended without a report (§9). **Undo** is a button on the toast that follows each change, not on the Plan updated card.
+When something needs attention, a card appears near the top: **Plan updated** (what moved, before → after), **Not enough time**, a missing deadline ("When is … due?"), or a **check-in** ("How did … go?") for a block that ended without a report (§9). **Undo** is a button on the toast that follows each change, not on the Plan updated card.
 
 **Overview** — the week, Monday to Sunday:
 
@@ -340,7 +340,7 @@ Finishing a block before its planned end frees time. Using that time for another
 - **Recording.** Done, Focus Mode "Yes, it's complete", Mark whole task done, and Ask SIKAD "Mark … as done" after its proposal is accepted (`completeSession`, `finishTask` in `js/store.js`) record the completion exactly as before. If it was before the block's planned end, the freed block runs from now (or its planned start, if that is still ahead) to its planned end. The replan then runs with `hold`: other tasks keep their slots, and only a from-scratch plan that fits *more* work may override that.
 - **Finding a suggestion** (`earlyFinishOffer`). Existing rules only: openings in the freed block that are free of fixed commitments, buffers and every planned session, starting no earlier than the next quarter hour and 15 minutes after the actual finish; tasks in `rank` order; skip a task with a requested start, a chosen later day, an open check-in, or more than one sitting; it must fit whole, gain an earlier day or at least `COMPACT_MIN` (30 minutes), end no later, pass `checkStart`, be kept by the engine, move no other task, and leave no more unscheduled work and no more at-risk tasks. The first that passes is the one suggestion; otherwise none.
 - **State.** `state.offer`: one object or null — `{ status: 'pending'|'declined', unitId, taskId, title, mins, from, to, gap, doneTitle, reason }`. Saved with the plan, so a reload shows the same card.
-- **Home card.** "Use the time you freed?" in the flow of Home (`offerCard` in `js/app.js`), with the task, the suggested and current times, the reason, **Accept** and **Decline**. Hidden during a focus session.
+- **Home card.** "Use the time you freed?" in the flow of Home (`offerCard` in `js/app.js`): "Move *task* to *time*?", then "Now: *current time* · *duration*. No other task moves.", the full reason under **Why this task?**, and **Accept** and **Decline**. Hidden during a focus session.
 - **Accept** (`acceptOffer`). Worked out again against the plan as it is now. Still the same: the resulting plan replaces the state in one step, moving only that task, without pinning it, completing it or crediting it; Undo restores the plan before it and the card. Changed: nothing is applied and the up-to-date suggestion (or none) takes its place.
 - **Decline** (`declineOffer`). Nothing moves. The suggestion is kept as `declined`, so reloads, rerenders and clock ticks do not bring it back, and the engine is told to leave the freed block alone (`gap`): gap-closing does not move anything into it and the fresh-plan swap is off.
 - **Every finish asks again.** Each early finish is evaluated on its own; accepting one suggestion authorises that one move only. One card at a time: a new suggestion replaces a waiting one; if the new finish frees nothing usable, the waiting one is checked again and kept. A task planned for tomorrow may be suggested for today and stays tomorrow until accepted.
@@ -360,7 +360,7 @@ The Home warnings are derived the same way (§10). A task whose day or time the 
 
 **When a block ends without a report.** On opening the app, at each new minute, and when the app comes back to the front, `setClock()` in `js/store.js` looks for task blocks whose planned end has passed (`noteMissed`). Each one becomes a **check-in**, once, tied to its task and its block. A running focus session is never ended this way; blocks of other tasks that pass during it are still noted.
 
-**While the question is open.** Nothing is credited and the task's status does not change. That block's minutes are **on hold**: the engine leaves them out when it plans (`units()` in `js/engine.js`), so they are not moved behind the student's back. Weekly progress still counts them as planned work. The timeline shows the block as "Ended · waiting for your answer". Home shows a card: "Your scheduled time for … has ended. How did it go?" Up to three cards show at once, oldest first.
+**While the question is open.** Nothing is credited and the task's status does not change. That block's minutes are **on hold**: the engine leaves them out when it plans (`units()` in `js/engine.js`), so they are not moved behind the student's back. Weekly progress still counts them as planned work. The timeline shows the block as "Ended · waiting for your answer". Home shows a card: "How did … go?" with "Its time is on hold until you answer." Up to three cards show at once, oldest first.
 
 | Answer | What happens |
 |---|---|
@@ -394,8 +394,8 @@ These sentences are built in `adjustNotes()` in `js/store.js` from the plan the 
 | Actual situation | Shown | Reason shown | Action |
 |---|---|---|---|
 | The task fits comfortably | The ordinary task card. No warning. | | |
-| Planned today, but today is tight | **At risk today**, on the Today card and the task's first block in the timeline | "This task may not fit today." Then the real numbers: the usable time left today, the time the task needs, and how many tasks are planned before it. Further causes appear only when true: its planned start has passed, it is marked hard, its time is an estimate. | **Adjust schedule** (a recommended time, §8.2) |
-| Cannot fit in what is left of today, but has a later slot before its deadline | **Won't fit today** | "This task won't fit today, but it has a later slot." Then the work left, the time left today, and the day and time it is planned for. | **Adjust schedule** |
+| Planned today, but today is tight | **At risk today**, on the Today card and the task's first block in the timeline | "You may not finish this today." **Why?** opens the real numbers: the usable time left today, the time the task needs, and how many tasks are planned before it. Further causes appear only when true: its planned start has passed, it is marked hard, its time is an estimate. | **Adjust schedule** (a recommended time, §8.2) |
+| Cannot fit in what is left of today, but has a later slot before its deadline | **Won't fit today** | "Planned tomorrow, 6:15 PM instead." (the day and time it is planned for). **Why?** opens the work left and the time left today. | **Adjust schedule** |
 | No slot before its deadline | The **Not enough time** card on Home ("No open block before the deadline"), and "Not enough time before deadline" as the status | The work that does not fit, the usable time before the deadline, and that nothing was shortened and no deadline changed. | **See a plan that fits**, **Review options**, **Adjust** |
 | A task has no deadline | "When is … due?" card | SIKAD won't guess a deadline. | Enter the date, **Schedule it** |
 
@@ -523,7 +523,7 @@ typed or spoken text
 | `focus.js` | 97 | `TempoFocus` | Time |
 | `assistant.js` | 240 | `TempoAssistant` | Time, Engine, Parser (Store at call time) |
 | `motion.js` | 133 | `TempoMotion` | — (DOM only) |
-| `app.js` | 3,757 | — | all of the above |
+| `app.js` | 3,773 | — | all of the above |
 
 #### `js/time.js`
 Wall-clock time helpers. Times are stored as "wall-clock milliseconds": a UTC timestamp whose UTC fields equal the student's local time. `T.now()` reads the device clock and timezone. Exposes the `MIN`, `HOUR`, `DAY` constants plus date construction and formatting helpers used everywhere else. `T.now()` is the real minute plus the presenter's Demo-clock shift (`T.shift`, zero unless set in the judge dock; `T.real()` is the device clock alone). Form helpers `dateInput`, `timeInput`, `joinInput`, `splitDur` and `joinDur` turn date, time, hours and minutes fields into wall-clock values without passing through the device timezone.
@@ -642,9 +642,11 @@ Section map, by line:
 
 [design.md](design.md) is the source of truth: the Forest / Paper / Butter palette with verified-contrast tokens, Plus Jakarta Sans for headings and Inter for body text (both self-hosted), the "Grounded Path" direction (the day as a path, fixed commitments as square posts with a lock, flexible tasks as round steps), one primary Butter button per view, and a distinct look for each engine status. [motion-spec.md](motion-spec.md) covers motion: the replan Shuffle, the completion strike, the Focus Mode spotlight, 120 ms for micro interactions and 200 ms for entrances, nothing decorative, and everything off under reduced motion.
 
+Copy follows design.md §1 "Voice and microcopy": lead with the decision, say a thing once per screen, and put longer reasons behind a native `<details class="more">` (**Why?**, **Why this task?**, **Why this time?**, **Details**, **More**; helper `brief()` in `js/app.js` shows the first sentence and folds the rest). The recommended time, every task that would move and the actions always stay visible.
+
 The widget previews and the simulated phone use only those tokens: the phone's bezel is the Focus Card's forest and its screen is paper, so both follow Light, Dark and System.
 
-#### `css/styles.css` (106 KB, 1,415 lines)
+#### `css/styles.css` (107 KB, 1,437 lines)
 The only stylesheet. Mobile first.
 
 - **Lines 1–23**: header comment mapping the design-system export's token names to this file's, then `@font-face` rules for the self-hosted fonts.
@@ -659,16 +661,16 @@ The only stylesheet. Mobile first.
 node tests/run-tests.js
 ```
 
-#### `tests/run-tests.js` (113 KB, 1,503 lines)
-Dependency-free Node script. It `require`s the seven logic modules (everything except `motion.js` and `app.js`), pins `T.now` to Sunday 11 October 2026, 9:30 PM so results repeat, and runs 130 tests with a tiny built-in `test`/`ok`/`eq` harness.
+#### `tests/run-tests.js` (113 KB, 1,507 lines)
+Dependency-free Node script. It `require`s the seven logic modules (everything except `motion.js` and `app.js`), pins `T.now` to Sunday 11 October 2026, 9:30 PM so results repeat, and runs 131 tests with a tiny built-in `test`/`ok`/`eq` harness.
 
-Covers: capture and clarification, Ask SIKAD answers, replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, working-method suggestions, focus-session outcomes, weekly progress, completion confidence, save/load, overdue placement and multi-day replanning, snoozing a pinned task, consecutive early finishes each asking again and moving nothing by themselves, every completion path, tomorrow-to-today suggestions, the early-finish suggestion (one at a time, no automatic move, buffer after the real finish, Accept rechecked, Decline remembered, re-evaluation after another change, required repairs not blocked), the Adjust schedule recommendation compared across whole plans, overdue work kept at today's earliest opening, gap compaction and when it must not happen, the 15-minute gap before a 10 PM commitment, a chosen time and its reflow, refused times and their alternatives, task status derived from the plan, check-ins for blocks that ended (no automatic completion, one question per block, Completed / Partly done / Not finished, the clock moving back), adjustments that reach later days and ones that cannot fit, legacy automatic-completion records, and the date, time and duration helpers.
+Covers: capture and clarification, Ask SIKAD answers (every "Try asking" example gets a real answer), replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, working-method suggestions, focus-session outcomes, weekly progress, completion confidence, save/load, overdue placement and multi-day replanning, snoozing a pinned task, consecutive early finishes each asking again and moving nothing by themselves, every completion path, tomorrow-to-today suggestions, the early-finish suggestion (one at a time, no automatic move, buffer after the real finish, Accept rechecked, Decline remembered, re-evaluation after another change, required repairs not blocked), the Adjust schedule recommendation compared across whole plans, overdue work kept at today's earliest opening, gap compaction and when it must not happen, the 15-minute gap before a 10 PM commitment, a chosen time and its reflow, refused times and their alternatives, task status derived from the plan, check-ins for blocks that ended (no automatic completion, one question per block, Completed / Partly done / Not finished, the clock moving back), adjustments that reach later days and ones that cannot fit, legacy automatic-completion records, and the date, time and duration helpers.
 
 Not covered: rendering, voice capture, motion, and anything else that needs a browser.
 
-Current result: **130 passed, 0 failed** (14 Oct 2026).
+Current result: **131 passed, 0 failed** (14 Oct 2026).
 
-**Browser checks.** Screens and motion are not covered by the logic suite. On 14 Oct 2026 a headless Chromium run (driving the real screens with the Demo clock fixed) covered: the task edit form; the check-in card, its three answers, the proposal, Accept, Keep current plan and Undo; the clock moving forward, +15 minutes, a reload, and back; the widget page; and the simulated phone with every notification and every button, at 320, 390 and 1280 px in light and dark. The main route in `user_flow.md` was replayed from the written guide. Not checked, and still marked untested in `test-guide.md` §4a: iOS Safari, a real phone, a screen reader, an installed PWA, offline use, System theme. Voice input was not checked either.
+**Browser checks.** Screens and motion are not covered by the logic suite. On 14 Oct 2026 a headless Chromium run (driving the real screens with the Demo clock fixed) covered: the task edit form; the check-in card, its three answers, the proposal, Accept, Keep current plan and Undo; the clock moving forward, +15 minutes, a reload, and back; three early finishes in a row with Accept, Decline, Undo and the Ask SIKAD "Mark … as done" path; after the readability pass (playwright-cli, 390 and 1280 px, light theme), Home with risk rows and **Why?**, a four-task proposal, Adjust schedule, a check-in proposal, Ask SIKAD's examples and commands, Add a task validation, Focus Mode's end screen, Profile and Overview; the widget page; and the simulated phone with every notification and every button, at 320, 390 and 1280 px in light and dark. The main route in `user_flow.md` was replayed from the written guide (271 checks matched after the readability pass). Not checked, and still marked untested in `test-guide.md` §4a: iOS Safari, a real phone, a screen reader, an installed PWA, offline use, System theme. Voice input was not checked either.
 
 **Covered since 14 Oct 2026:** overnight times, dates that have passed, vague weeks, impossible dates, and two tasks in one command (`errors.md` §10, E2–E4, E7, E11), each with its own test.
 
@@ -715,14 +717,13 @@ Time is the device's real date and time, unless a presenter shifts the Demo cloc
 - Widgets and notifications exist as in-app previews only. The phone on the notification page is drawn in the page; nothing reaches the device.
 - Confirmed defects and items that still need testing are listed in `errors.md` §10 and §11.
 
-Confirmed defects: none open. E1 to E11 in `errors.md` §10 are all fixed; the last five (E2, E3, E4, E7, E11) needed changes in `js/parser.js` and one in `js/engine.js`, which were authorized on 14 Oct 2026. Known limits that remain: a time the student types in Adjust schedule can still leave another task at risk (the sheet warns before acceptance; the recommendation itself avoids it); a start inside the current quarter hour is refused; a weekly commitment past midnight has to be entered as two; "change the deadline for X to next week" still takes that Sunday; numeric dates are read month first.
+Confirmed defects: none open. E1 to E22 in `errors.md` §10 are all fixed (E21 regressed once and was fixed again as E22); of E1–E11, the last five (E2, E3, E4, E7, E11) needed changes in `js/parser.js` and one in `js/engine.js`, which were authorized on 14 Oct 2026. Known limits that remain: a time the student types in Adjust schedule can still leave another task at risk (the sheet warns before acceptance; the recommendation itself avoids it); a start inside the current quarter hour is refused; a weekly commitment past midnight has to be entered as two; "change the deadline for X to next week" still takes that Sunday; numeric dates are read month first.
 
 Remaining work: replace the provisional widget and notification content (`WIDGETS`, `NOTIFS`); check the items in `errors.md` §11; test on real phones.
 
 Places where other documents and the code disagree:
 
-- `README.md` links `design.md` as `prompts/prompt-2/design.md`. The file is at the repo root.
-- `CLAUDE.md` describes `app.js` as about 150 KB. It is 256 KB.
+- `CLAUDE.md` describes `app.js` as about 150 KB. It is 267 KB.
 - The `localStorage` key and the globals still use the earlier project name (`tempo-state-v1`, `Tempo*`), while the product is called SIKAD.
 
 ## 19. Where to find and modify each feature
@@ -733,11 +734,11 @@ Places where other documents and the code disagree:
 | How the schedule is built | `js/engine.js` `schedule`, `rank` |
 | What gets saved, and replan/undo | `js/store.js` `replan`, `save`, `load` |
 | A screen's markup | `js/app.js`, section map in §14 |
-| What a button does | `js/app.js` ACTIONS (line 2777), by `data-action` name |
+| What a button does | `js/app.js` action handlers (`const A`, line 2814), by `data-action` name |
 | Colours, spacing, type | `css/styles.css` `:root`; rules in `design.md` §4–§6 |
 | An animation | `js/motion.js`, `css/styles.css` line 980 (Motion section), `motion-spec.md` |
 | Sample data | `js/data.js` |
-| Widget or notification wording | `WIDGETS` and `NOTIFS` in `js/app.js` (lines 1730 and 1853) |
+| Widget or notification wording | `WIDGETS` and `NOTIFS` in `js/app.js` (lines 1773 and 1899) |
 | What happens when time passes | `setClock` and `noteMissed` in `js/store.js`; `syncClock` in `js/app.js` (clock section) |
 | The early-finish suggestion | `earlyFinishOffer`, `acceptOffer`, `declineOffer` in `js/store.js`; `offerCard`, `offerAccept`, `offerDecline` in `js/app.js`; `hold` and `gap` in `schedule()` in `js/engine.js` |
 | The Adjust schedule sheet | `openAdjust`, `adjustSheet`, `acceptAdjust` in `js/app.js`; `recommendAdjustment`, `previewMove`, `checkStart` in `js/store.js` |
@@ -747,5 +748,5 @@ Places where other documents and the code disagree:
 | How to demonstrate the app | `user_flow.md` |
 | The risk wording a student sees | `completionConfidence` in `js/engine.js` (`label`, `what`, `why`); `riskChip`, `riskText`, `todayCard` in `js/app.js` |
 | How to test by hand | `test-guide.md` |
-| Presenter tools | `js/app.js` judge mode (line 152); open the app with `?demo=1` |
+| Presenter tools | `js/app.js` judge mode (line 161); open the app with `?demo=1` |
 | Why a change was made | `process-log.md`, then the finding ID in the audit report |

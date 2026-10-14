@@ -65,7 +65,9 @@ Several tests ask whether the plan changed. Open **Tasks** and note each task's 
 node tests/run-tests.js
 ```
 
-It prints one line per test and ends with a count such as `130 passed, 0 failed`. Record the count you get.
+It prints one line per test and ends with a count such as `131 passed, 0 failed`. Record the count you get.
+
+Separately from these logic tests and from your manual tests, the coding agent replayed parts of this guide in headless Chromium (Playwright scripts and playwright-cli) on 14 Oct 2026; see `process-log.md`. Those runs do not count as manual results: every row in §7 stays **NOT RUN** until you perform it.
 
 ---
 
@@ -127,13 +129,13 @@ It prints one line per test and ends with a count such as `130 passed, 0 failed`
 |---|---|---|
 | 1 | **Tasks → Add a task manually**. Leave everything empty. Tap **Add to plan**. | Under the name field: "Task name is missing. Type a short name, e.g. "IT 208 report"." Nothing is added. |
 | 2 | Type `Lab Summary` as the name. Leave the deadline empty. Tap **Add to plan**. | Toast: "Task added. It needs a deadline before it can be scheduled." On **Tasks** it is under **Needs attention** with **Due: Not set** and **Status: Needs a deadline**. It has no **Next** line. |
-| 3 | Go to **Home**. | A card: "When is "Lab Summary" due?" with "SIKAD won't guess a deadline." |
+| 3 | Go to **Home**. | A card: "When is "Lab Summary" due?" with "SIKAD won't guess a deadline. Add the date and it gets scheduled." |
 | 4 | On that card, tap **Schedule it** without picking a date. | "No date picked yet. Choose the due date, then tap Schedule it." |
 | 5 | Pick **Wednesday** of the demo week, set the time to **05:00 PM**, tap **Schedule it**. | Toast "Plan updated." The task now has a **Next** time before Wednesday 5:00 PM. |
 | 6 | **Tasks** → tap **Lab Summary**. Clear both **Time needed** boxes. Tap **Save & replan**. | A message under the field: "Time needed must be between 5 minutes and 40 hours." (or "Enter the time needed in hours and minutes."). The sheet stays open and nothing is saved. Close with ✕. |
 | 6a | **Tasks → Add a task manually**. Name `Draft`. Set **Start at** to **Tuesday 06:15 PM** and leave the deadline empty. Tap **Add to plan**. | "Add the deadline too. A start time alone does not tell SIKAD when the work is due." Nothing is added. Close with ✕. |
 | 6b | In the same form, pick a **Start at** date and do not touch the time. | The time fills in by itself, so a half-entered start cannot be saved. Clearing the date clears the time too. Close with ✕. |
-| 7 | Tap the centre **Ask SIKAD** button → **Speak or type**. Type `Finish my programming assignment` and tap **Send**. | A task card with the question "When is the finish my programming assignment due? I need the date to schedule it." and "SIKAD won't guess a deadline." The time needed is marked ≈ **AI estimate**. |
+| 7 | Tap the centre **Ask SIKAD** button → **Speak or type**. Type `Finish my programming assignment` and tap **Send**. | A task card with the question "When is the finish my programming assignment due? I need the date to schedule it." and "Saved but not scheduled until it has a due date." The time needed is marked ≈ **AI estimate**. |
 | 8 | Without setting a date, tap **See plan changes**, then **Accept changes**. | The proposal says the task "is saved but won't be scheduled until it has a deadline" and "No other task needs to move." After accepting, it appears under **Needs attention** with **Due: Not set** and **Needs a deadline**. No other task moved. |
 | 9 | Give it a deadline from the Home card, as in step 5. | It is scheduled before that deadline. |
 
@@ -192,7 +194,7 @@ New assignment: capstone chapter due tomorrow at 8 AM, about 5 hours. New assign
 
 | # | Do this | Expected |
 |---|---|---|
-| 5 | Note **Weekly task progress** on Home (0%). **Judge tools** → Demo clock to the same Monday **01:30 PM** → **Set** → close. | A card: "Your scheduled time for Algorithm Tracing Worksheet has ended. How did it go?" with **Completed**, **Partly done**, **Not finished**. Progress is still 0%. On **Tasks**, the task is still open, not under Completed. |
+| 5 | Note **Weekly task progress** on Home (0%). **Judge tools** → Demo clock to the same Monday **01:30 PM** → **Set** → close. | A card: "How did Algorithm Tracing Worksheet go?" with **Completed**, **Partly done**, **Not finished**. Progress is still 0%. On **Tasks**, the task is still open, not under Completed. |
 | 6 | **Judge tools** → **+15 min**. Reload the page. | Still exactly one card. Still 0%. |
 | 7 | Tap **Partly done**. Enter `0` hr `30` min. Tap **See recommended schedule**. | A sheet, **Recommended schedule**. It says the task still needs 30 min, when it was planned, the recommended new time, and lists the other tasks that move. The plan has not changed yet. |
 | 8 | Tap **Keep current plan**. | "No changes were made. Your plan is as it was." The card is still on Home. Progress still 0%. |
@@ -204,7 +206,7 @@ New assignment: capstone chapter due tomorrow at 8 AM, about 5 hours. New assign
 
 | # | Do this | Expected |
 |---|---|---|
-| 16 | Note the plan (§2.4). On **Home**, tap **Done** on the next task (Algorithm Tracing Worksheet, planned 12:15 PM). | The task is done. **No other task has moved.** A card **Use the time you freed?** names Class Diagram Exercise, **Today, 12:15 PM – 1:15 PM**, where it is planned now, and why. It has **Accept** and **Decline**. Only one such card is shown. |
+| 16 | Note the plan (§2.4). On **Home**, tap **Done** on the next task (Algorithm Tracing Worksheet, planned 12:15 PM). | The task is done. **No other task has moved.** A card **Use the time you freed?** asks "Move Class Diagram Exercise to **Today, 12:15 PM – 1:15 PM**?" and shows "Now: Today, 6:15 PM – 7:15 PM · 1 hr. No other task moves." **Why this task?** opens the reason. It has **Accept** and **Decline**. Only one such card is shown. |
 | 17 | Check the suggested time. | It starts no earlier than 15 minutes after you tapped Done, and on the next quarter hour. It does not overlap a class or commute, ends before the task's deadline, and is one sitting. |
 | 18 | Tap **Decline**. | "Kept as it was…". The card is gone and the plan is exactly as noted in step 16. |
 | 19 | Reload the page, then **Judge tools** → **+15 min**. | The card does not come back. The plan is unchanged. |
@@ -219,21 +221,24 @@ New assignment: capstone chapter due tomorrow at 8 AM, about 5 hours. New assign
 | 28 | Tap **Decline** on it. Then **+15 min** and reload. | Use Case Diagram stays tomorrow. The card does not come back. |
 | 29 | Make a clean state. Repeat rows 16 and 21 (Done, Accept), wait one minute, **+15 min**, reload. | After accepting, nothing else moves by itself afterwards. In particular ERD and Business Rules stays tomorrow. |
 | 30 | Make a clean state. Start the next task in **Focus Mode**, **Stop early**, **Yes, it's complete**. Then repeat with **Tasks → (task) → Mark whole task done**, and with Ask SIKAD `Mark Big-O Worksheet as done` → **See plan changes** → **Accept changes**. | Each way of finishing early ends in the same card and moves nothing until you accept. |
+| 31 | Make a clean state. Read each card and sheet you meet in rows 16–30 and in Test 4 Parts A–B, without opening any **Why?**, **Why this task?**, **Why this time?**, **Details** or **More**. Then open each one. | Before opening: you can tell which task, which time, and what **Accept** / **Decline** / **Accept changes** would do. Every task that would move is listed before → after. After opening: the longer reason or the numbers are there; nothing is cut off. Each toggle works with the keyboard (Tab, then Enter). |
+
+A suggestion that the plan has overtaken (an old card answered after the plan changed) is worked out again and never applied as it was: the toast says "Your plan changed, so the suggestion was worked out again. Have a look before accepting." or "That time is no longer free for …". This is covered by the automated test "a suggestion that the plan has overtaken is worked out again, never applied as it was"; it is hard to reach by hand, so there is no manual row for it.
 
 **Part C — warnings and honesty.**
 
 | # | Do this | Expected |
 |---|---|---|
 | 12 | Make a clean state. **Ask SIKAD** → `I have to work tonight from 6:30 PM to 10:30 PM` → **Send** → **See plan changes** → **Accept changes**. Read the **Today** card. | **At risk today** and **Won't fit today** appear as words, each with a sentence that gives the real time left and time needed, and an **Adjust schedule** button. **No percentage** appears beside them. |
-| 13 | On the **At risk today** row (Algorithm Tracing Worksheet, which is overdue), tap **Adjust schedule**. | A sheet titled **Adjust schedule**. It shows the task, **Time still needed**, **Planned now: Today, 12:15 PM – 1:15 PM**, and **Recommended: keep Today, 12:15 PM** with the reason that this is already today's earliest open time and overdue work goes first. The **Start at** date and time are already filled in. **What would change** says nothing moves, and **Accept changes** is greyed out. Tomorrow is **not** recommended. |
-| 13a | Set **Start at** to **Thursday 07:00 PM**. | The plan is worked out again: several tasks move across more than one day, each shown was → now, and a warning says Class Diagram Exercise would then be at risk today. Still nothing saved. |
+| 13 | On the **At risk today** row (Algorithm Tracing Worksheet, which is overdue), tap **Adjust schedule**. | A sheet titled **Adjust schedule**. It shows the task, **Time still needed**, **Planned now: Today, 12:15 PM – 1:15 PM**, and **Recommended: keep Today, 12:15 PM** with the reason that this is already today's earliest open time and overdue work goes first (the rest under **Why?**). The **Start at** date and time are already filled in. **What would change** says nothing moves, and **Accept changes** is greyed out. Tomorrow is **not** recommended. |
+| 13a | Set **Start at** to **Thursday 07:00 PM**. | The plan is worked out again: several tasks move across more than one day, each shown was → now (**Details** opens the summary), and a warning says Class Diagram Exercise would then be at risk today. Still nothing saved. |
 | 13b | Set **Start at** to **Monday 03:00 PM**. | "That time can't be used", naming IT 207, with a button for the closest time that works. **Accept changes** is disabled. |
 | 13c | Tap **Keep current plan**. Compare the plan (§2.4). | Nothing changed. |
 | 13d | Tap **Adjust schedule** again, set **Start at** to **Tuesday 06:15 PM** (your own choice, against the recommendation), read the warning, tap **Accept changes**. | Toast "Plan updated." with **Undo**. The **Today** card no longer has a row for Algorithm Tracing Worksheet. On **Tasks** it reads **Scheduled · Next: Tomorrow, 6:15 PM** under **Up next**, not under Needs attention. **Overview → Tue** shows it at 6:15 PM. |
 | 13e | Read the **Today** card again, wait 15 seconds, read it again. | Warnings that are still true are still there both times: Class Diagram Exercise **At risk today** (it took the tight midday gap, as the sheet warned) and Big-O Worksheet **Won't fit today**. Nothing vanishes or reappears by itself. |
 | 13f | Make a clean state. Add the two-assignment text from Part A, **See plan changes**, **Don't adjust**, **Accept changes**, then **Keep my current plan** if a sheet opens. Open **Tasks**. | The work that has no slot is under **Needs attention** with **Doesn't fit yet**, and Home shows **Not enough time**. A genuine problem is not cleared by replanning. |
 | 14 | **Profile → Test notifications**. Tap **Show on phone** for each kind. Try the buttons on one real and one **Sample** notification. | Each notification appears inside the drawn phone. The phone and the list of kinds do not move or change size when you show, switch or clear one. A button on a real one opens that task or screen. A button on a sample that needs a real task opens nothing and says "This is sample content…". The page states that the phone is a drawing and nothing is sent. |
-| 15 | **Profile**, read **How SIKAD plans & its limits** and **Connected platforms**. | They say that reading photos and platform connections use sample data, that no AI model is connected, and that widgets and notifications are previews. |
+| 15 | **Profile**, read **How SIKAD plans & its limits** (open **More about how SIKAD plans**) and **Connected platforms**. | Visible without opening: reading photos and platform connections use sample data. Under **More about how SIKAD plans**: no AI model is connected, and widgets and notifications are previews. |
 
 **Pass:** fixed commitments never move; nothing is planned after its deadline unless it was already overdue or you accepted a late plan; too much work is stated plainly; rejecting a proposal changes nothing; time passing alone never completes a task or adds progress; completion needs your tap; the remaining time is the one you entered; warnings explain themselves in words; Adjust schedule arrives with a recommended time, takes another, refuses an impossible one, and after acceptance every screen shows the same plan with no stale warning; finishing early moves nothing until you accept the suggestion, every early finish asks again, and declining it sticks; simulated features are labelled.
 

@@ -51,6 +51,15 @@
   /** Risk status chip: a plain status, never a number. The score behind it (E.completionConfidence) only decides whether to warn. */
   const riskChip = (r) => `<span class="chip risk ${r.level === 'risk' || r.level === 'wont_fit' ? '' : 'high'}">${esc(r.label)}</span>`;
   const riskText = (r) => `<b>${esc(r.what || '')}</b> ${esc(r.why || r.reason || '')}`;
+  /** First sentence shown; the rest behind a "Why?" (or other) disclosure. Nothing is dropped. */
+  const brief = (text, label = 'Why?') => {
+    const parts = String(text || '').split(/(?<=[.!?])\s+(?=[A-Z"“])/);
+    return `<p class="small">${esc(parts[0])}</p>${parts.length > 1 ? `<details class="more"><summary>${label}</summary><p class="small">${esc(parts.slice(1).join(' '))}</p></details>` : ''}`;
+  };
+  /** One line a student can act on; the numbers behind it sit under "Why?". */
+  const riskShort = (r) => (r.level === 'wont_fit'
+    ? (r.movedTo ? `Planned ${esc(T.rel(r.movedTo, now()).replace(/^(Today|Tomorrow)/, (m) => m.toLowerCase()))}, ${T.timeShort(r.movedTo)} instead.` : 'Planned on a later day instead.')
+    : r.level === 'infeasible' ? 'No time left before its deadline.' : 'You may not finish this today.');
   /** "about 3 hrs" / "about 2 days": how far past a deadline an agreed-late task would finish. */
   const lateWords = (mins) => (mins < 90 ? `${Math.max(5, Math.round(mins / 5) * 5)} min` : mins < 36 * 60 ? `about ${Math.round(mins / 60)} hrs` : `about ${Math.round(mins / 1440)} days`);
   // Too much work: SIKAD works out a plan that fits (S.suggestAdjustment) and asks before using it.
@@ -775,7 +784,7 @@
     if (it.askFirst === undefined) it.askFirst = !!needsAnswer(it);
     return [it, n];
   }).sort((x, y) => (y[0].askFirst ? 1 : 0) - (x[0].askFirst ? 1 : 0) || x[1] - y[1]);
-  const estLegend = () => `<p class="legend small"><span class="est-dur">≈ 2 hrs</span> <span class="chip est">AI estimate</span> means SIKAD guessed the time from the task type. Change it if you know better.</p>`;
+  const estLegend = () => `<p class="legend small"><span class="est-dur">≈ 2 hrs</span> <span class="chip est">AI estimate</span> is a guess from the task type. Change it anytime.</p>`;
 
   /** The confirmed baseline, shown again before the first plan so it can be corrected (brief Stage 3). */
   function baselineSummary() {
@@ -913,7 +922,7 @@
           <div class="chips" role="radiogroup" aria-labelledby="${qid}">${it.ambiguous.map((o, k) =>
             `<button class="chip-btn" role="radio" aria-checked="false" data-action="pickAmbiguous" data-scope="${scope}" data-n="${n}" data-k="${k}">${esc(o.label)}</button>`).join('')}</div></div></div>`
           : needsDate ? `<div class="clarify" tabindex="-1" data-question>${ICON.question}<div><p id="${qid}"><b>${esc(it.clarification || 'When is this due? I need the date to schedule it.')}</b></p>
-            <p class="small">SIKAD won't guess a deadline. Without one, this is saved but not scheduled. Set the due date below.</p></div></div>` : ''}
+            <p class="small">Saved but not scheduled until it has a due date.</p></div></div>` : ''}
         <div class="rc-grid">
           ${dtField(`${path}.task.deadline`, t.deadline, { label: 'Due', cls: needsDate && !it.ambiguous ? 'needs-answer' : '', rerender: true, describedby: needsDate ? qid : '' })}
           ${durField(`${path}.task.durationMins`, t.durationMins, { label: 'Time needed', extra: t.isAiEstimate ? ' ' + estChip() : '', est: t.isAiEstimate, estPath: `${path}.task.isAiEstimate` })}
@@ -1064,9 +1073,9 @@
     return `
       <section class="status-card s-neutral offer" aria-labelledby="offer-title" data-flip="offer" data-flip-exit>
         <div class="sc-head">${ICON.step}<h2 id="offer-title">Use the time you freed?</h2></div>
-        <p><b>${esc(o.title)}</b> could move to <b class="num">${T.rel(o.to.start, n)}, ${T.range(o.to.start, o.to.end)}</b>.</p>
-        <p class="small num">Planned now: ${T.rel(o.from.start, n)}, ${T.range(o.from.start, o.from.end)} · ${T.dur(o.mins)}</p>
-        <p class="small">${esc(o.reason)} Nothing changes unless you accept.</p>
+        <p>Move <b>${esc(o.title)}</b> to <b class="num">${T.rel(o.to.start, n)}, ${T.range(o.to.start, o.to.end)}</b>?</p>
+        <p class="small num">Now: ${T.rel(o.from.start, n)}, ${T.range(o.from.start, o.from.end)} · ${T.dur(o.mins)}. No other task moves.</p>
+        <details class="more"><summary>Why this task?</summary><p class="small">${esc(o.reason)}</p></details>
         <div class="row"><button class="btn small" data-action="offerAccept" aria-label="Accept: move ${esc(o.title)} to ${T.rel(o.to.start, n)} ${T.timeShort(o.to.start)}">${ICON.check} Accept</button><button class="btn small ghost" data-action="offerDecline" aria-label="Decline: keep ${esc(o.title)} where it is">Decline</button></div>
       </section>`;
   }
@@ -1091,9 +1100,8 @@
           <div class="row ck-actions"><button class="btn small" data-action="ckDone" data-ck="${esc(c.ck)}">${ICON.check} Completed</button><button class="btn small" data-action="ckPartial" data-ck="${esc(c.ck)}">Partly done</button><button class="btn small" data-action="ckNotDone" data-ck="${esc(c.ck)}">Not finished</button></div>`;
       return `
         <section class="status-card s-clarify checkin" aria-labelledby="${id}" data-flip="ci:${esc(c.ck)}" data-flip-exit>
-          <div class="sc-head">${ICON.clock}<h2 id="${id}">Your scheduled time for ${esc(c.title)} has ended. How did it go?</h2></div>
-          <p class="num">It was planned for ${T.rel(c.start, now()).toLowerCase()}, ${T.range(c.start, c.end)} · ${T.dur(c.mins)}.</p>
-          <p>Nothing is marked done until you say so. This block's time is on hold, not moved.</p>${body}
+          <div class="sc-head">${ICON.clock}<h2 id="${id}">How did ${esc(c.title)} go?</h2></div>
+          <p class="num">Planned ${T.rel(c.start, now()).toLowerCase()}, ${T.range(c.start, c.end)} · ${T.dur(c.mins)}. Its time is on hold until you answer.</p>${body}
         </section>`;
     }).join('') + (list.length > shown.length ? `<p class="small ck-more">${list.length - shown.length} more ended ${list.length - shown.length === 1 ? 'block' : 'blocks'} to answer after ${shown.length === 1 ? 'this' : 'these'}.</p>` : '');
   }
@@ -1206,7 +1214,7 @@
       return `
         <div class="outcome" role="group" aria-labelledby="outcome-title" data-enter="fm:outcome">
           <h3 id="outcome-title" tabindex="-1">Is this piece of work complete?</h3>
-          <p>${t.finished ? 'The timer finished. ' : ''}You focused for <b class="num">${T.dur(Math.max(1, t.focusedMins))}</b> using ${esc(m.name.toLowerCase())}. A finished timer does not mark the task done. You decide.</p>
+          <p>${t.finished ? 'The timer finished. ' : ''}You focused for <b class="num">${T.dur(Math.max(1, t.focusedMins))}</b>. Only you can mark it done.</p>
           ${partial ? `
             <span class="on-dark-label" id="focus-left-l">Time still needed for ${esc(session.title.split(' — ').pop())}</span>
             <span class="dur-pair" role="group" aria-labelledby="focus-left-l"><input id="focus-left" type="number" inputmode="numeric" min="0" max="40" step="1" value="${T.splitDur(guess).h}" aria-label="Hours still needed"><span aria-hidden="true">hr</span><input id="focus-left-m" type="number" inputmode="numeric" min="0" max="59" step="5" value="${T.splitDur(guess).m}" aria-label="Minutes still needed"><span aria-hidden="true">min</span></span>
@@ -1286,7 +1294,10 @@
           <p class="small">SIKAD won't squeeze work into time you don't have, or push it past a deadline.</p>
         </section>`);
     }
-    const warns = (state.alerts || []).filter((a) => a.level === 'WARNING' && !/needs a deadline|waiting on/.test(a.message));
+    // "… is past its deadline" for the task already on the Focus Card is said there ("Why this?"); not twice.
+    const nextT = taskById((E.nextSession(state.plan, now()) || {}).taskId);
+    const warns = (state.alerts || []).filter((a) => a.level === 'WARNING' && !/needs a deadline|waiting on/.test(a.message) &&
+      !(nextT && /past its deadline/.test(a.message) && a.message.startsWith(`"${nextT.title}"`)));
     if (warns.length) out.push(`<section class="status-card s-clarify alerts" data-flip="warn" data-flip-exit>${warns.map((w) => `<p class="alert-line">${ICON.alert}<span>${esc(w.message)}</span></p>`).join('')}</section>`);
     const infos = (state.alerts || []).filter((a) => a.level === 'INFO');
     if (infos.length) out.push(`<section class="status-panel s-info" data-flip="info" data-flip-exit>${ICON.info}<div>${infos.map((w) => `<p>${esc(w.message)}</p>`).join('')}</div></section>`);
@@ -1314,14 +1325,14 @@
     const risks = todayRisks().filter((r) => r.level !== 'infeasible').slice(0, 3);
     const riskBlock = risks.length ? `
         <ul class="risk-list" aria-label="Tasks that may not get finished today">${risks.map((r) => `<li class="${r.level === 'risk' ? '' : 'is-high'}">
-          <div><b>${esc(r.title)}</b> ${riskChip(r)}<p class="small">${riskText(r)}</p></div>
+          <div><b>${esc(r.title)}</b> ${riskChip(r)}<p class="small">${riskShort(r)}</p>
+            <details class="more"><summary>Why?</summary><p class="small">${esc(r.why || r.reason || '')}</p></details></div>
           <button class="btn small" data-action="adjustTask" data-id="${r.taskId}" aria-label="Adjust schedule for ${esc(r.title)}">Adjust schedule</button></li>`).join('')}</ul>
-        <p class="small muted risk-note">Worked out from today's plan and the time left. A rule of thumb, not a prediction.</p>` : '';
+        <p class="small muted risk-note">Estimates from today's plan, not predictions.</p>` : '';
     return `
       <section class="card today" aria-labelledby="today-title" data-flip="today">
         <h2 id="today-title">Today</h2>
-        <p class="metric-value num">${d.left ? `${T.dur(d.leftMins)} <span>remaining</span>` : d.total ? 'All tasks completed for today!' : 'No tasks planned for today'}</p>
-        ${d.left ? '<p class="small metric-sub">Time needed for your remaining tasks today.</p>' : ''}
+        <p class="metric-value num">${d.left ? `${T.dur(d.leftMins)} <span>of tasks left</span>` : d.total ? 'All tasks completed for today!' : 'No tasks planned for today'}</p>
         ${d.total ? `<div class="bar week-bar" role="img" aria-label="${count} today"><span style="--from:${from}%;width:${d.percent}%"></span></div>` : ''}${riskBlock}
         <div class="card-foot">${d.total ? `<span class="small num">${count}</span>` : '<span></span>'}<button class="text-link" data-action="viewSchedule">View schedule <span aria-hidden="true">→</span></button></div>
       </section>`;
@@ -1349,7 +1360,7 @@
         <div class="fit-head"><h2 id="week-title">Weekly task progress</h2>${w.totalMins ? `<span class="week-pct num">${win ? ICON.check : ''}${w.percent}%</span>` : ''}</div>
         ${w.totalMins ? `<div class="bar week-bar" role="img" aria-label="${T.dur(w.doneMins)} done of ${T.dur(w.totalMins)} planned this week"><span style="--from:${from}%;width:${w.percent}%"></span></div>` : ''}
         <p class="small num week-line">${done}</p>
-        <p class="small num week-line">${w.leftMins ? `<b>${T.dur(w.leftMins)}</b> of planned task time left · ` : ''}${sessionsLine}</p>
+        ${w.focusSessions ? `<p class="small num week-line">${sessionsLine} of focus this week</p>` : ''}
         <div class="card-foot"><span class="fit-verdict ${short || unsched ? 'bad' : 'good'}" title="${T.dur(cap.required)} of work due by ${T.DAY_SHORT[T.dow(cap.until)]}, ${approx(cap.free)} open">${verdict}</span><button class="text-link" data-action="viewWeek">View weekly overview <span aria-hidden="true">→</span></button></div>
         ${sessions.length ? `<details class="session-log"><summary>${ICON.chevron}Recent focus sessions (${state.focusLog.length})</summary>
           <ul class="plain small num">${sessions.map((f) => `<li><span><b>${esc(f.title)}</b><br>${T.short(f.at)} · ${esc((F.METHODS[f.method] || F.METHODS.none).name)} · ${T.dur(Math.max(1, f.focusedMins))} focused · ${outcomeWord[f.outcome] || f.outcome}</span></li>`).join('')}</ul></details>` : ''}
@@ -1565,7 +1576,7 @@
             <i class="load" style="--load:${st.load}%"></i><small class="num">${compact(st.planned)}</small></button>`;
         }).join('')}
       </div>
-      <p class="small muted strip-legend">${isPast ? 'Hours = time planned that day. Bar = how much of it got done.' : 'Bars show how much of each day\'s open time is planned. A full bar is a full day.'}</p>
+      <p class="small muted strip-legend">${isPast ? 'Hours = time planned that day. Bar = how much of it got done.' : 'Bar = how much of each day\'s open time is planned.'}</p>
       </div>
       <div class="col-b">
       <section class="section"><div class="section-head"><h2>${T.date(sel)}</h2></div>${sel < today ? pastTimeline(sel) : timeline(sel)}</section>
@@ -1691,15 +1702,19 @@
           <li>SIKAD plans your time. It doesn't do your schoolwork or write graded work for you.</li>
           <li>It isn't a counselor or a health tool, and it doesn't judge your stress. If things feel like too much, talk to someone you trust or your school's guidance office.</li>
           <li>Times marked <span class="est-dur">≈</span> are guesses. Change them anytime.</li>
-          <li>A plan isn't a promise. SIKAD can't guarantee grades or that everything fits. It shows you when it doesn't.</li>
           <li>Your classes and fixed commitments never move unless you change them. You decide.</li>
           <li>In this prototype, reading photos/PDFs and calendar or class-platform connections use sample data. Voice uses your browser's own speech recognition where it has one. Planning, rescheduling and Undo work on what you type.</li>
+          <li>Your data stays on this device, in this browser. It isn't synced or backed up, and a private window doesn't keep it.</li>
+        </ul>
+        <details class="more"><summary>More about how SIKAD plans</summary>
+        <ul class="limits-list">
+          <li>A plan isn't a promise. SIKAD can't guarantee grades or that everything fits. It shows you when it doesn't.</li>
           <li>SIKAD never marks work done because time passed. When a planned block ends, it asks how it went: Completed, Partly done or Not finished. Until you answer, that block's time is on hold.</li>
           <li>Widgets and notifications are previews inside this app. The phone on the notification page is a drawing, not your device: SIKAD installs no home-screen widget and sends no push or system notification.</li>
           <li>"At risk today" and "Won't fit today" come from simple rules about the time left and the work planned. They are not predictions and not measured from your history.</li>
           <li>Ask SIKAD follows fixed patterns, not an AI model. If it doesn't understand, it asks instead of guessing.</li>
-          <li>Your data stays on this device, in this browser. It isn't synced or backed up, and a private window doesn't keep it.</li>
         </ul>
+        </details>
       </section>
       </div>
       <div class="col-b">
@@ -2278,7 +2293,7 @@
     const thread = ui.askThread.slice(-2);
     return `
       <h2 id="sheet-title"><span class="title-icon">${form ? ICON.tasks : ICON.braindump}</span>${form ? 'Add a task' : 'Ask SIKAD'}</h2>
-      <p class="sheet-sub">${form ? 'Fill in what you know. SIKAD fits it into your plan, and you can undo it right after.' : 'Ask about your plan, add a task, or say what changed. Nothing in your plan changes until you confirm it.'}</p>
+      <p class="sheet-sub">${form ? 'Fill in what you know. You can undo it right after.' : 'Ask about your plan or say what changed. Nothing changes until you confirm.'}</p>
       ${thread.length && !form ? `<div class="ask-thread" aria-label="Recent answers">${thread.map((e, i) => askEntry(e, i, thread.length - 1)).join('')}</div>` : ''}
       <div class="tabs" role="tablist" aria-label="Input method">
         <button role="tab" aria-selected="${!form}" class="${!form ? 'on' : ''}" data-action="dumpInput" data-v="text">Speak or type</button>
@@ -2292,7 +2307,7 @@
         <button class="btn primary block" data-action="processDump">Send</button>
         <div class="ask-examples"><p class="small" id="ask-ex">Try asking</p>
           <div class="chips" aria-labelledby="ask-ex">${D.QUESTIONS.map((q, i) => `<button class="chip-btn" data-action="askExample" data-i="${i}">${esc(q)}</button>`).join('')}</div></div>
-        <p class="small muted">Answers are worked out from your current plan using fixed rules. No AI model is connected in this prototype.</p>`}`;
+        <p class="small muted">Answers use fixed rules on your current plan. No AI model is connected.</p>`}`;
   }
 
   function manualForm() {
@@ -2300,9 +2315,9 @@
     return `
       <div class="form">
         <label>Task name <span class="req">(required)</span><input value="${esc(f.title)}" data-bind="sheet.form.title" placeholder="e.g. IT 208 report" required aria-required="true"></label>
-        ${dtField('sheet.form.deadline', f.deadline, { label: 'Deadline', hint: 'When it is due. Leave empty if you do not know yet.' })}
+        ${dtField('sheet.form.deadline', f.deadline, { label: 'Deadline', hint: 'Leave empty if you don\'t know yet.' })}
         ${durField('sheet.form.durationMins', f.durationMins, { label: 'Time needed', hint: 'Leave both empty and SIKAD estimates it.' })}
-        ${dtField('sheet.form.pinnedStart', f.pinnedStart || null, { label: 'Start at (optional)', defTime: T.minsToHm(Math.min(23 * 60, T.ceilTo(now(), 60) / T.MIN % 1440)), hint: 'Ask for a time and other tasks move around it. Leave empty and SIKAD picks the slot.' })}
+        ${dtField('sheet.form.pinnedStart', f.pinnedStart || null, { label: 'Start at (optional)', defTime: T.minsToHm(Math.min(23 * 60, T.ceilTo(now(), 60) / T.MIN % 1440)), hint: 'Leave empty and SIKAD picks a time.' })}
         <label>Priority (optional)<select data-bind="sheet.form.priority">${['high', 'medium', 'low'].map((p) => `<option value="${p}" ${p === f.priority ? 'selected' : ''}>${PRI_LABEL[p]}</option>`).join('')}</select></label>
         <label>Difficulty (optional)<select data-bind="sheet.form.difficulty">${S.DIFFICULTIES.map((p) => `<option value="${p}" ${p === (f.difficulty || 'medium') ? 'selected' : ''}>${DIFF_LABEL[p]}</option>`).join('')}</select></label>
         <label>Notes (optional)<textarea rows="2" data-bind="sheet.form.notes">${esc(f.notes)}</textarea></label>
@@ -2597,10 +2612,11 @@
         ${adj.stillUnfit.length ? `<p class="small">Still not fitting: ${adj.stillUnfit.map((x) => `${esc(x.title)} (${T.dur(x.mins)})`).join(', ')}.</p>` : ''}</div></div>` : '';
     return `
       <h2 id="sheet-title" tabindex="-1">${adj ? 'A plan that fits' : ui.sheet.checkin ? 'Recommended schedule' : 'Review the updated plan'}</h2>
-      <p class="sheet-sub">${adj ? 'You have more work than time before some deadlines. SIKAD adjusted the plan so all of it has a place. Nothing changes unless you accept.' : ui.sheet.checkin ? 'This is a proposal. Nothing is saved until you accept it. If you keep your current plan, the question stays on Home.' : 'This is a proposal. Nothing is saved until you accept it.'}</p>
+      <p class="sheet-sub">${adj ? 'There is more work than time before some deadlines. This plan gives all of it a place. Nothing changes until you accept.' : ui.sheet.checkin ? 'Nothing changes until you accept. Keep your plan and the question stays on Home.' : 'Nothing changes until you accept.'}</p>
       ${adjustBlock}
       <p class="small">Because: ${esc(u.trigger)}</p>
-      ${u.notes.map((x) => `<p class="small">${esc(x)}</p>`).join('')}
+      ${u.notes.length ? `<p class="small">${esc(u.notes[0])}</p>` : ''}
+      ${u.notes.length > 1 ? `<details class="more"><summary>Why this time?</summary>${u.notes.slice(1).map((x) => `<p class="small">${esc(x)}</p>`).join('')}</details>` : ''}
       <h3 class="list-h">What would change</h3>
       ${u.changes.length ? `<ul class="changes on-sheet">${u.changes.map((c) => `<li>${changeLine(c)}</li>`).join('')}</ul>` : '<p class="small">No other task needs to move.</p>'}
       ${(d.alerts || []).filter((x) => x.code === 'PIN_FAILED').map((x) => `<div class="status-panel s-clarify" role="status">${ICON.alert}<div><b>The time you asked for is not available</b><p>${esc(x.message)}</p></div></div>`).join('')}
@@ -2642,10 +2658,10 @@
       const wasRisk = new Set(todayRisks().filter((r) => r.level === 'risk' || r.level === 'high').map((r) => r.taskId));
       const newRisk = E.completionConfidence(d, d.now).filter((r) => (r.level === 'risk' || r.level === 'high') && r.taskId !== t.id && !wasRisk.has(r.taskId));
       body = `
-        ${u.notes.map((x) => `<p class="small">${esc(x)}</p>`).join('')}
         <h3 class="list-h">What would change</h3>
         ${u.changes.length ? `<ul class="changes on-sheet">${u.changes.map((c) => `<li>${changeLine(c)}</li>`).join('')}</ul>` : '<p class="small">Nothing moves: this is where it already is.</p>'}
-        ${risk ? `<div class="status-panel s-clarify" role="status">${ICON.alert}<div><b>${esc(risk.label)}, even at this time</b><p>${esc(risk.why || risk.reason)}</p></div></div>` : ''}
+        ${u.notes.length && u.changes.length ? `<details class="more"><summary>Details</summary>${u.notes.map((x) => `<p class="small">${esc(x)}</p>`).join('')}</details>` : ''}
+        ${risk ? `<div class="status-panel s-clarify" role="status">${ICON.alert}<div><b>${esc(risk.label)}, even at this time</b>${brief(risk.why || risk.reason, 'More')}</div></div>` : ''}
         ${newRisk.length ? `<div class="status-panel s-clarify" role="status">${ICON.alert}<div><b>${newRisk.map((r) => esc(r.title)).join(', ')} would then be at risk today</b><p>${newRisk.length === 1 ? 'It takes' : 'They take'} the time this frees up today, and today is tight. You can still accept, or pick another time.</p></div></div>` : ''}
         ${short ? `<div class="status-panel s-critical" role="status">${ICON.hourglass}<div><b>Not enough time</b><p>Not fitting with this time: ${(d.unscheduled || []).map((x) => `${esc(x.title)} (${T.dur(x.mins)})`).join(', ')}. Pick another time, or keep your current plan.</p></div></div>` : ''}
         <p class="small upd-fixed">${ICON.lock}<span>Fixed commitments unchanged.</span></p>`;
@@ -2655,16 +2671,16 @@
     }
     return `
       <h2 id="sheet-title" tabindex="-1">Adjust schedule</h2>
-      <p class="sheet-sub">A recommended time, worked out from your current plan. Nothing changes until you accept.</p>
+      <p class="sheet-sub">Nothing changes until you accept.</p>
       <dl class="adj-facts num">
         <div><dt>Task</dt><dd>${esc(t.title)}</dd></div>
         <div><dt>Time still needed</dt><dd>${T.dur(rec.remainingMins)}${rec.mins !== rec.remainingMins ? ` (next step: ${T.dur(rec.mins)})` : ''}</dd></div>
         <div><dt>Planned now</dt><dd>${rec.current ? `${whenFull(rec.current.start)} – ${T.time(rec.current.end)}` : 'Not planned'}</dd></div>
         <div><dt>Due</dt><dd>${t.deadline != null ? `${T.short(t.deadline)}, ${T.time(t.deadline)}` : 'Not set'}</dd></div>
       </dl>
-      <div class="status-panel adj-rec" role="status">${ICON.step}<div><b>${rec.start != null ? `Recommended: ${rec.basis === 'keep' ? 'keep ' : ''}<span class="num">${whenFull(rec.start)}</span>` : 'No better time found'}</b><p>${esc(rec.reason)}</p>
+      <div class="status-panel adj-rec" role="status">${ICON.step}<div><b>${rec.start != null ? `Recommended: ${rec.basis === 'keep' ? 'keep ' : ''}<span class="num">${whenFull(rec.start)}</span>` : 'No better time found'}</b>${brief(rec.reason)}
         ${rec.start != null ? `<button class="btn small" data-action="adjustUse" data-start="${rec.start}" ${usingRec ? 'disabled' : ''}>${usingRec ? `${ICON.check} Using recommended time` : 'Use recommended time'}</button>` : ''}</div></div>
-      <div class="form">${dtField('sheet.start', sh.start, { label: 'Start at', rerender: true, defTime: T.timeInput(rec.start != null ? rec.start : T.ceilTo(now(), 60)), hint: 'Choose another time if you prefer. The plan below is worked out again.' })}</div>
+      <div class="form">${dtField('sheet.start', sh.start, { label: 'Start at', rerender: true, defTime: T.timeInput(rec.start != null ? rec.start : T.ceilTo(now(), 60)), hint: 'Or choose another time. The changes below update.' })}</div>
       ${body}
       <div class="sheet-actions">
         <button class="btn" data-action="closeSheet">Keep current plan</button>
@@ -2695,12 +2711,12 @@
     const p = 'sheet.d';
     return `
       <h2 id="sheet-title" tabindex="-1">Task details</h2>
-      <p class="sheet-sub">Everything here is your call. Saving recalculates the plan.</p>
+      <p class="sheet-sub">Saving updates your plan.</p>
       <div class="form">
         <label>Task name<input value="${esc(d.title)}" data-bind="${p}.title"></label>
-        ${durField(`${p}.total`, d.total, { label: 'Time needed', extra: d.isAiEstimate ? ' ' + estChip() : '', est: d.isAiEstimate, estPath: `${p}.isAiEstimate`, hint: 'How long the whole task takes. SIKAD never shortens this.' })}
-        ${dtField(`${p}.deadline`, d.deadline, { label: 'Deadline', hint: 'When it is due. Changing it does not pick a time to work on it.' })}
-        ${dtField(`${p}.pinnedStart`, d.pinnedStart || null, { label: 'Start at (optional)', defTime: T.minsToHm(Math.min(23 * 60, T.ceilTo(now(), 60) / T.MIN % 1440)), hint: 'Asks SIKAD to plan the work at this time. Leave empty and SIKAD picks the slot.' })}
+        ${durField(`${p}.total`, d.total, { label: 'Time needed', extra: d.isAiEstimate ? ' ' + estChip() : '', est: d.isAiEstimate, estPath: `${p}.isAiEstimate`, hint: 'For the whole task. SIKAD never shortens it.' })}
+        ${dtField(`${p}.deadline`, d.deadline, { label: 'Deadline', hint: 'When it is due, not when to work on it.' })}
+        ${dtField(`${p}.pinnedStart`, d.pinnedStart || null, { label: 'Start at (optional)', defTime: T.minsToHm(Math.min(23 * 60, T.ceilTo(now(), 60) / T.MIN % 1440)), hint: 'Leave empty and SIKAD picks a time.' })}
         <div class="grid2">
           <label>Priority<select data-bind="${p}.priority">${['high', 'medium', 'low'].map((x) => `<option value="${x}" ${x === d.priority ? 'selected' : ''}>${PRI_LABEL[x]}</option>`).join('')}</select></label>
           <label>Difficulty<select data-bind="${p}.difficulty">${S.DIFFICULTIES.map((x) => `<option value="${x}" ${x === d.difficulty ? 'selected' : ''}>${DIFF_LABEL[x]}</option>`).join('')}</select></label>
@@ -3557,7 +3573,7 @@
       if (newDay) { ui.dayView = 'today'; ui.weekDay = null; ui.weekStart = null; }
       if (newDay || fresh.length || state.checkins.length < had.size) undoSnap = null;   // an older Undo would drop or revive a question
       clockDirty = true;
-      if (!quiet && fresh.length && !state.active) toast(fresh.length === 1 ? `Your scheduled time for "${fresh[0].title}" has ended. How did it go? Answer on Home.` : `${fresh.length} scheduled blocks have ended. Say how they went on Home.`);
+      if (!quiet && fresh.length && !state.active) toast(fresh.length === 1 ? `The time for "${fresh[0].title}" has ended. How did it go? Answer on Home.` : `${fresh.length} scheduled blocks have ended. Say how they went on Home.`);
     }
     if (quiet || !clockDirty) return;
     if (midEntry()) { persist(); return; }

@@ -1427,3 +1427,11 @@ body.spotlight .focus { z-index: 36; }
 .status-card.offer { background: var(--sage-tint); border-color: var(--line); }
 .status-card.offer .sc-head > svg { color: var(--forest); }
 .status-card.offer .btn:not(.ghost) { background: var(--surface); }
+
+/* ---------- short status lines with the detail one tap away ---------- */
+details.more { margin-top: 2px; }
+details.more > summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--forest); list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: "›"; margin-left: 4px; transition: transform var(--dur-micro) var(--ease-out); }
+details.more[open] > summary::after { transform: rotate(90deg); }
+details.more > p, details.more > div { margin: 2px 0 6px; color: var(--ink-2); }

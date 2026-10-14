@@ -34,6 +34,10 @@
 - **The engine stays invisible** (story §23.8). Prefer "SIKAD moved…" or a passive "Moved to…" over "The AI decided…". Use the label **"AI estimate"** only where prompt.md sets `is_ai_estimate: true`.
 - **No sparkle.** Drop ✨ and "magic" wording. "Find my next move" or "Adjust my plan" are better than "Generate AI Magic".
 - **Keep sentences ≤ 20 words** on cards. Body text is English. Taglish microcopy is a pending decision (audit A6.5).
+- **Lead with the decision.** A card or sheet opens with the question or fact the student acts on ("Move Big-O Worksheet to Today, 12:15 PM – 1:15 PM?", "You may not finish this today."), then one short supporting line, then the actions.
+- **Say a thing once per screen.** If the Focus Card's **Why this?** already says a task is overdue, no warning line repeats it; a card titled **Today** does not say "today" again.
+- **Details one tap away, never removed.** Longer reasons and the numbers behind a status go in a native `<details class="more">` with a short label (**Why?**, **Why this task?**, **Why this time?**, **Details**, **More**). Use at most one **Why?** per sheet. Never hide what the decision needs: the recommended time, every task that would move (before → after), and what Accept does stay visible.
+- **One reassurance line per sheet:** "Nothing changes until you accept." (or "…until you confirm." in Ask SIKAD). Not repeated in the body.
 
 ---
 

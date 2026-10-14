@@ -11,7 +11,7 @@ SIKAD is a working, clickable prototype of the product in [user_story.md](prompt
 The full, checked script is [user_flow.md](user_flow.md). The short version below is older; where they differ, follow `user_flow.md`.
 
 1. Open `index.html`. Either do the full setup (name → **Use sample COR** → questions → sync → record or type your tasks → review baseline and tasks → *Generate my schedule*) or tap **Skip setup and load Alex's week**.
-2. Home shows the **Focus Card** ("What to do next" with *Why this?*), **This week** progress, "Does it all fit?", and the timeline.
+2. Home shows the **Focus Card** ("What to do next" with *Why this?*), the **Today** and **Weekly task progress** cards (with **Fits** when the week's work fits), and the timeline.
 3. Open **Ask SIKAD** (centre button). Tap *How much usable time do I have tomorrow?* and *Can I realistically finish everything before Friday?* The answers are computed from the current plan.
 4. In Ask SIKAD, say or type **"I have a work shift tomorrow from 6 PM to 10 PM."** Review the interpreted commitment → *See plan changes* → the proposal lists what would move → **Accept changes** (or Reject: nothing changes).
 5. Tap **Start task**. The Focus Card expands, the rest of the screen dims, and SIKAD suggests a working method and says why. Pick one → *Start session* → Pause / Resume → *Stop early* → answer **Partly done** and enter what is left. The plan and **This week** update. Tap the dimmed area (or *Show my plan*) to leave the spotlight without stopping the timer.
@@ -40,13 +40,14 @@ Rules the engine enforces:
 - Overdue unfinished work takes the earliest real slot; work it displaces is placed again in deadline order (difficulty second), across as many days as needed.
 - Time passing never marks work done. A block that ends without a report becomes a check-in: **Completed**, **Partly done** or **Not finished**. Unfinished work is planned again, across later days if needed, and shown as a recommended schedule before the plan changes.
 - A tight day is shown as a status with a reason (**At risk today**, **Won't fit today**, **Not enough time**), not as a percentage. The rule-based score behind it is internal.
+- Finishing early never moves another task by itself. Home asks **Use the time you freed?** ("Move … to …?") with **Accept** and **Decline**. A task planned for tomorrow can be suggested for today; it moves only on Accept. Every early finish is evaluated again, so a second early finish gets its own suggestion. Repairs that keep the plan valid (a clash with a new commitment, a missed deadline) still happen at once and are shown before → after with Undo.
 - New commitments are one-time unless the input says they recur.
 - AI-estimated durations are labelled as estimates.
 - Deadlines are never invented.
 
 ## Design
 
-The visual system follows [design.md](prompts/prompt-2/design.md) (rationale in [design-audit.md](prompts/prompt-2/design-audit.md)): Forest/Paper/Butter palette with verified-contrast tokens in `css/styles.css`, Plus Jakarta Sans + Inter self-hosted in `fonts/` (latin + latin-ext subsets, SIL OFL 1.1), and the "Grounded Path" timeline.
+The visual system follows [design.md](design.md) (rationale in [design-audit.md](prompts/prompt-2/design-audit.md)): Forest/Paper/Butter palette with verified-contrast tokens in `css/styles.css`, Plus Jakarta Sans + Inter self-hosted in `fonts/` (latin + latin-ext subsets, SIL OFL 1.1), and the "Grounded Path" timeline.
 
 Motion follows [motion-spec.md](motion-spec.md): the replan Shuffle, the completion strike and the Focus Mode spotlight are built with CSS and the Web Animations API in `js/motion.js`. There is no animation library. With "reduce motion" switched on in the OS, nothing animates and no information is lost.
 
@@ -61,6 +62,8 @@ Motion follows [motion-spec.md](motion-spec.md): the replan Shuffle, the complet
 | Dictaphone | Browser speech recognition with Stop / Cancel; transcript is editable before sending | `js/app.js` |
 | Scheduling and replanning | Priority, 15-minute buffer, protected fixed commitments, honest `INFEASIBLE` | `js/engine.js` |
 | Proposals | A confirmed change is replanned on a copy; the student accepts or rejects the result | `js/app.js` `applyDump` |
+| Early-finish suggestion | After an early finish, one card suggests a task for the freed time; nothing moves until **Accept** | `js/store.js` `earlyFinishOffer`, `acceptOffer`, `declineOffer`; `js/app.js` `offerCard` |
+| Check-ins | A planned block that ends without a report asks "How did … go?" (**Completed**, **Partly done**, **Not finished**) | `js/store.js`, `js/app.js` `checkinCards` |
 | Focus Mode | Working-method suggestion, spotlight, timer, pause/resume, mark done or stop early, outcome question | `js/focus.js`, `js/store.js` |
 | Motion | Cards slide to their new slots after a replan; completion strike; sheet, toast and card transitions | `js/motion.js`, `motion-spec.md` |
 | Weekly progress | Done work against planned work, focus-session history | `js/store.js` `weeklyProgress` |
@@ -88,7 +91,7 @@ A daily streak rewards showing up every day. Student schedules are uneven (exam 
 - **Schedule import** loads sample text; no OCR runs.
 - **Platform connections** (Google Calendar, Canvas, Teams, Classroom) are toggles only.
 - **Voice** uses the browser's own speech recognition (Chrome and Edge; it needs an internet connection). Other browsers get a typed alternative and a sample transcript labelled as demo. SIKAD stores no audio.
-- **Time** is the device's real local date, time and timezone (`T.now()` in `js/time.js`). Nothing simulates the clock; the sample week is generated relative to today. Only the automated tests pin the clock.
+- **Time** is the device's real local date, time and timezone (`T.now()` in `js/time.js`); the sample week is generated relative to today. For presenting, `?demo=1` adds **Judge tools** with a **Demo clock** that shifts the app's time (it is labelled **Shifted**; **Use real time** returns to the device clock). The automated tests pin the clock.
 
 ## Testing
 
@@ -98,9 +101,9 @@ Manual tests for the user/developer are in [test-guide.md](test-guide.md): five 
 node tests/run-tests.js
 ```
 
-102 logic tests with no dependencies (102 passed, 0 failed on 14 Oct 2026): capture and clarification, Ask SIKAD answers, replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, working-method suggestions, focus-session outcomes, weekly progress, and saved-data handling.
+131 logic tests with no dependencies (131 passed, 0 failed on 14 Oct 2026): capture and clarification, Ask SIKAD answers (including every "Try asking" example), replanning around a work shift, protected fixed commitments, the 15-minute buffer, infeasible plans, check-ins, early-finish suggestions (including several early finishes in a row and a tomorrow-to-today suggestion), working-method suggestions, focus-session outcomes, weekly progress, and saved-data handling.
 
-Browser behaviour (rendering, motion, Focus Mode, reduced motion, refresh, reset) was checked with a headless Chromium script during development, against the acceptance criteria in `motion-spec.md` §10. That script is not part of this repository.
+Browser behaviour (rendering, motion, Focus Mode, reduced motion, refresh, reset) was checked with a headless Chromium script during development, against the acceptance criteria in `motion-spec.md` §10. That script is not part of this repository. On 14 Oct 2026 the main route in `user_flow.md` and the early-finish sequence were replayed in headless Chromium (desktop and phone widths) after the scheduling fix and the readability pass. iOS Safari, a real phone, a screen reader, an installed PWA and offline use have not been tested (see `test-guide.md` §4a).
 
 ## Changes from user_story.md
 
@@ -111,6 +114,7 @@ The final implementation brief (`prompts/prompt-5/`) extends the original user s
 - **Focus Mode** adds working-method suggestions and a pause/resume/end session flow.
 - **Weekly progress** and focus-session history are new.
 - Tasks can name a **dependency** in plain text ("…after the database proposal").
+- Cards and sheets lead with the decision and keep longer reasons one tap away (**Why?**, **Why this task?**, **Details**); the recommended time and every task that would move stay visible (design.md §1, "Voice and microcopy").
 
 ## Navigation and accessibility
 
